@@ -44,7 +44,7 @@ except ImportError:
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif'}
 
 # Excluded directories (not included in galleries)
-EXCLUDED_DIRS = {'.thumbs', '.git', '__pycache__', 'node_modules'}
+EXCLUDED_DIRS = {'.thumbs', '.lr', '.git', '__pycache__', 'node_modules'}
 
 
 def parse_args():
@@ -59,8 +59,8 @@ Examples:
   python generate_gallery.py galleries/ --output-root public/galleries/ --force
 
 Output Structure:
-  Each directory with images gets an index.html and .thumbs/ subdirectory.
-  Thumbnails are 200px max dimension JPG files (HEIF converted automatically).
+   Each directory with images gets an index.html and .thumbs/ subdirectory.
+   Thumbnails are 400px max dimension JPG files (HEIF converted automatically).
         """
     )
     
@@ -255,12 +255,12 @@ def needs_lr_version(source_path, width, height):
     is_heif = Path(source_path).suffix.lower() in {'.heic', '.heif'}
     dimension_sum = width + height
     
-    # Need LR if h+w > 5000 or if it's a HEIF file
-    return dimension_sum > 5000 or is_heif
+    # Need LR if h+w > 3000 or if it's a HEIF file
+    return dimension_sum > 3000 or is_heif
 
 
-def generate_lr_image(source_path, lr_dir, lr_size_max=3000):
-    """Generate low-res version of image (h+w < 3000)."""
+def generate_lr_image(source_path, lr_dir, lr_size_max=2000):
+    """Generate low-res version of image (h+w < 2000)."""
     try:
         source_path = Path(source_path)
         base_name = source_path.stem
@@ -650,7 +650,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         .gallery-grid {{
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
             grid-auto-rows: auto;
             gap: 15px;
             padding-bottom: 20px;
@@ -802,11 +802,11 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         }}
         
         .lightbox.landscape .lightbox-image-container img {{
-            max-width: calc(100vw - 40px) !important;
+            max-width: 90vw !important;
             max-height: calc(70vh - 60px) !important;
-            object-fit: contain !important;
             width: auto !important;
             height: auto !important;
+            display: block !important;
         }}
         
         .lightbox.landscape .lightbox-exif {{
@@ -834,10 +834,10 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         .lightbox.portrait .lightbox-image-container img {{
             max-width: calc(65vw - 200px) !important;
-            max-height: calc(90vh - 40px) !important;
-            object-fit: contain !important;
+            max-height: 85vh !important;
             width: auto !important;
             height: auto !important;
+            display: block !important;
         }}
         
         .lightbox.portrait .lightbox-exif {{
@@ -849,7 +849,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         .lightbox-image-container img {{
             max-width: 100%;
             max-height: 90vh;
-            object-fit: contain;
+            width: auto;
+            height: auto;
             display: block;
         }}
         
