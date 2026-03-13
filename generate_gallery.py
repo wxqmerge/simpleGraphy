@@ -1177,7 +1177,10 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 lightboxImg.style.cursor = 'pointer';
                 lightboxImg.onclick = function(e) {{
                     e.stopPropagation();
-                    window.open(imageData.fullRes, '_blank');
+                    const newWindow = window.open(imageData.fullRes, '_blank');
+                    if (newWindow) {{
+                        newWindow.focus();
+                    }}
                 }};
                 
                 // Show hint for full-res click
