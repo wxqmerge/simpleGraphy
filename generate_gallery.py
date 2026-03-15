@@ -194,18 +194,25 @@ def get_exif_data(image_path):
                 focal_35 = exif_dict.get(42035)
                 focal = exif_dict.get(37386)
                 
-                if focal_35:
+                # Helper to convert EXIF fraction tuple to float
+                def parse_focal(val):
+                    if isinstance(val, (tuple, list)) and len(val) >= 2:
+                        try:
+                            return val[0] / val[1]
+                        except:
+                            return None
                     try:
-                        fl = float(focal_35)
-                        exif_data['focal_length'] = f'{fl:.0f}mm (35mm equiv)'
-                    except (ValueError, TypeError):
-                        pass
-                elif focal:
-                    try:
-                        fl = float(focal)
-                        exif_data['focal_length'] = f'{fl:.0f}mm'
-                    except (ValueError, TypeError):
-                        pass
+                        return float(val)
+                    except:
+                        return None
+                
+                fl_35 = parse_focal(focal_35)
+                fl = parse_focal(focal)
+                
+                if fl_35 is not None:
+                    exif_data['focal_length'] = f'{fl_35:.0f}mm (35mm equiv)'
+                elif fl is not None:
+                    exif_data['focal_length'] = f'{fl:.0f}mm'
                 
                 # Orientation tag (tag 274) - critical for proper display
                 orientation = exif_dict.get(274, 1)
@@ -464,7 +471,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         # Get EXIF data
         exif = get_exif_data(img_path)
-        exif_json = json.dumps(exif)
+        exif_json = json.dumps(exif).replace('"', '&quot;')
         
         # Determine if landscape (width > height after orientation is applied)
         width = exif.get('width', 0)
@@ -789,62 +796,71 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             justify-content: center;
         }}
         
-        /* Landscape layout (EXIF on bottom) */
+        /* Landscape layout (EXIF on top) */
         .lightbox.landscape .lightbox-content-wrapper {{
             flex-direction: column;
         }}
         
-        .lightbox.landscape .lightbox-image-container {{
-            width: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding-bottom: 20px;
-            flex-grow: 1;
-        }}
-        
-        .lightbox.landscape .lightbox-image-container img {{
-            max-width: 90vw !important;
-            max-height: calc(70vh - 60px) !important;
-            width: auto !important;
-            height: auto !important;
-            display: block !important;
-        }}
-        
         .lightbox.landscape .lightbox-exif {{
             width: 100%;
-            padding: 0 40px 30px;
+            padding: 15px 40px;
             display: flex;
             justify-content: center;
             gap: 30px;
             flex-wrap: wrap;
             min-height: 60px;
+            background: rgba(0, 0, 0, 0.7);
         }}
         
-        /* Portrait layout (EXIF on side) */
-        .lightbox.portrait .lightbox-content-wrapper {{
-            flex-direction: row;
-            align-items: center;
-        }}
-        
-        .lightbox.portrait .lightbox-image-container {{
+        .lightbox.landscape .lightbox-image-container {{
+            width: 100%;
             display: flex;
+            flex-direction: column;
             justify-content: center;
-            margin-right: 30px;
             align-items: center;
+            padding-bottom: 10px;
+            flex-grow: 1;
         }}
         
-        .lightbox.portrait .lightbox-image-container img {{
-            max-width: calc(65vw - 200px) !important;
-            max-height: 85vh !important;
+        .lightbox.landscape .lightbox-image-container img {{
+            max-width: 90vw !important;
+            max-height: calc(75vh - 80px) !important;
             width: auto !important;
             height: auto !important;
             display: block !important;
         }}
         
+        /* Portrait layout (EXIF on left) */
+        .lightbox.portrait .lightbox-content-wrapper {{
+            flex-direction: row;
+            align-items: flex-start;
+        }}
+        
         .lightbox.portrait .lightbox-exif {{
-            width: 250px;
+            width: 280px;
             padding: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+        }}
+        
+        .lightbox.portrait .lightbox-image-container {{
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            flex: 1;
+            min-width: 0;
+            padding-left: 20px;
+        }}
+        
+        .lightbox.portrait .lightbox-image-container img {{
+            max-width: calc(70vw - 300px) !important;
+            max-height: 85vh !important;
+            width: auto !important;
+            height: auto !important;
+            display: block !important;
         }}
         
         /* Default image sizing - applies to all lightbox images */
@@ -901,12 +917,32 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         /* EXIF display */
         .lightbox-exif {{
+            display: block;
             color: #fff;
             font-size: 0.9em;
+            min-height: 60px;
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.7);
+        }}
+        
+        .exif-header {{
+            font-weight: bold;
+            font-size: 1.1em;
+            margin-bottom: 15px;
+            color: #4fc3f7;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            padding-bottom: 8px;
         }}
         
         .exif-item {{
             margin-bottom: 12px;
+            padding: 4px 0;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }}
+        
+        .exif-item:hover {{
+            background: rgba(255, 255, 255, 0.1);
         }}
         
         .exif-item .label {{
@@ -920,24 +956,13 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             color: #eee;
         }}
         
-        /* Portrait layout: EXIF items stacked vertically */
-        .lightbox.portrait .lightbox-exif {{
-            display: flex;
-            flex-direction: column;
-        }}
-        
-        /* Filename display at bottom */
+        /* Filename display below image */
         .lightbox-filename {{
-            position: absolute;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: #fff;
-            font-size: 0.9em;
             text-align: center;
-            padding: 8px 16px;
-            background: rgba(0, 0, 0, 0.6);
-            border-radius: 4px;
+            padding: 10px 0;
+            color: #aaa;
+            font-size: 0.85em;
+            letter-spacing: 0.5px;
             white-space: nowrap;
             z-index: 1002;
         }}
@@ -1039,10 +1064,10 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         <button class="lightbox-nav prev" id="prev-btn">&#10094;</button>
         <button class="lightbox-nav next" id="next-btn">&#10095;</button>
         <div class="lightbox-content-wrapper">
+            <div class="lightbox-exif" id="lightbox-exif"></div>
             <div class="lightbox-image-container">
                 <img id="lightbox-img" src="" alt="">
             </div>
-            <div class="lightbox-exif" id="lightbox-exif"></div>
             <div class="lightbox-filename" id="lightbox-filename"></div>
         </div>
     </div>
@@ -1120,13 +1145,13 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 lightboxImg.src = newSrc;
             }}
             
-            // Parse and display EXIF data
+               // Parse and display EXIF data
             if (imageData.exif) {{
                 try {{
                     const exif = JSON.parse(imageData.exif);
                     
                     // Build EXIF HTML
-                    let exifHtml = '';
+                    let exifHtml = '<div class="exif-header">EXIF Info</div>';
                     
                     // Size (dimensions)
                     if (exif.width && exif.height) {{
@@ -1163,11 +1188,11 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                     }}
                 }} catch (err) {{
                     console.error('Error parsing EXIF:', err);
-                    lightboxExif.innerHTML = '';
+                    lightboxExif.innerHTML = '<div class="exif-header">EXIF Info</div><div class="exif-item">No EXIF data available</div>';
                     lightboxImg.removeAttribute('data-orientation');
                 }}
             }} else {{
-                lightboxExif.innerHTML = '';
+                lightboxExif.innerHTML = '<div class="exif-header">EXIF Info</div><div class="exif-item">No EXIF data available</div>';
                 lightboxImg.removeAttribute('data-orientation');
             }}
             
