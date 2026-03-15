@@ -4,12 +4,12 @@ Gallery Generator - Creates responsive photo galleries with thumbnails and light
 
 Usage:
     python generate_gallery.py galleries/
-    python generate_gallery.py galleries/ --thumb-size 200 --force
+    python generate_gallery.py galleries/ --thumb-size 400 --force
 
 Arguments:
     --root, -r          Root directory to scan (default: galleries)
     --output-root, -o   Where to write index.html files (default: same as --root)
-    --thumb-size, -t    Max thumbnail dimension in pixels (default: 200)
+    --thumb-size, -t    Max thumbnail dimension in pixels (default: 400)
     --force, -f         Force rebuild all thumbnails even if they exist
 """
 
@@ -18,6 +18,8 @@ import os
 import html
 import json
 import warnings
+import sys
+from io import StringIO
 from pathlib import Path
 from datetime import datetime
 from PIL import Image, ExifTags
@@ -358,7 +360,7 @@ def generate_thumbnail(source_path, thumb_path, thumb_size):
                 img = apply_orientation(img, orientation)
                 
                 # Skip extremely large images (panoramas > 100MP)
-                if img.width * img.height > 100_000_000:
+                if img.width * img.height > 1000_000_000:
                     print(f"    [SKIP] Very large image: {os.path.basename(source_path)} ({img.width}x{img.height})")
                     # Still create a small thumbnail
                     img = img.resize((thumb_size, int(thumb_size * img.height / img.width)), Image.Resampling.LANCZOS)
@@ -1330,12 +1332,39 @@ def walk_and_generate(root_path, output_root, thumb_size, force):
     return total_pages
 
 
+class TeeStream:
+    """Write to both stdout and a file."""
+    def __init__(self, original, log_file):
+        self.original = original
+        self.log_file = log_file
+        
+    def write(self, message):
+        self.original.write(message)
+        self.log_file.write(message)
+        self.log_file.flush()
+        
+    def flush(self):
+        self.original.flush()
+        self.log_file.flush()
+
+
 def main():
     """Main entry point."""
     args = parse_args()
     
     root_path = os.path.abspath(args.root)
     output_root = os.path.abspath(args.output_root or args.root)
+    
+    # Set up logging to parent directory (default behavior)
+    log_file = None
+    try:
+        parent_dir = os.path.dirname(root_path)
+        log_path = os.path.join(parent_dir, 'gallery.log')
+        log_file = open(log_path, 'w', encoding='utf-8')
+        sys.stdout = TeeStream(sys.stdout, log_file)
+        sys.stderr = TeeStream(sys.stderr, log_file)
+    except IOError as e:
+        print(f"[WARN] Could not create log file at {log_path}: {e}")
     
     # Validate root directory
     if not os.path.isdir(root_path):
@@ -1354,6 +1383,12 @@ def main():
     
     if total_pages == 0:
         print("\nNo directories with images or subdirectories found.")
+    
+    # Restore stdout and close log file
+    if log_file:
+        sys.stdout = sys.__stdout__
+        sys.stderr = sys.__stderr__
+        log_file.close()
     
     return 0
 
