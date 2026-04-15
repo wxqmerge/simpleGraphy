@@ -508,7 +508,14 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         # Get EXIF data
         exif = get_exif_data(img_path)
-        exif_json = json.dumps(exif).replace('"', '&quot;')
+        exif_json = json.dumps(exif)
+        # Escape HTML special characters for safe embedding in HTML attributes
+        exif_json = (exif_json
+            .replace('&', '&amp;')
+            .replace('<', '&lt;')
+            .replace('>', '&gt;')
+            .replace('"', '&quot;')
+            .replace("'", '&#39;'))
         
         # Determine if landscape (width > height after orientation is applied)
         width = exif.get('width', 0)
