@@ -39,7 +39,12 @@ def cleanup_thumbs(thumbs_dir, source_stems):
     try:
         for entry in os.scandir(thumbs_dir):
             if entry.is_file() and entry.name.endswith('_thumb.jpg'):
-                # Extract original filename stem
+                # Skip directory preview thumbnails - they're previews for subdirectories
+                # and their source images are in those subdirectories, not the current folder
+                if entry.name.endswith('_dir_thumb.jpg'):
+                    continue
+                
+                # Extract original filename stem for regular thumbnails
                 # e.g., "IMG_123_thumb.jpg" -> "IMG_123"
                 stem = entry.name.rsplit('_thumb', 1)[0]
                 if stem not in source_stems:
@@ -89,6 +94,12 @@ Examples:
         help='Preview deletions without actually deleting'
     )
     
+    parser.add_argument(
+        '--verbose', '-v',
+        action='store_true',
+        help='Show detailed source file counts per directory'
+    )
+    
     args = parser.parse_args()
     root_path = Path(args.root).resolve()
     
@@ -97,6 +108,9 @@ Examples:
         return 1
     
     # Counters
+    total_source_files = 0
+    total_thumbs_found = 0
+    total_lr_found = 0
     total_thumbs_deleted = 0
     total_lr_deleted = 0
     total_bytes_freed = 0
@@ -115,11 +129,25 @@ Examples:
         
         # Get source image stems in this directory
         source_stems = find_source_images(current_path)
+        total_source_files += len(source_stems)
+        
+        if args.verbose:
+            print(f"\n{rel_path or 'root'}: {len(source_stems)} source file(s)")
         
         # Check .thumbs directory
         thumbs_dir = current_path / '.thumbs'
         if thumbs_dir.is_dir():
             orphaned_thumbs = cleanup_thumbs(thumbs_dir, source_stems)
+            
+            # Count thumbnails in this directory
+            try:
+                thumb_count = sum(1 for e in os.scandir(thumbs_dir) if e.is_file() and e.name.endswith('_thumb.jpg'))
+                total_thumbs_found += thumb_count
+                if args.verbose and thumb_count > 0:
+                    print(f"    .thumbs/: {thumb_count} thumbnail(s), {len(orphaned_thumbs)} orphaned")
+            except:
+                pass
+            
             if orphaned_thumbs:
                 thumb_paths = [str(Path(p).relative_to(root_path)) for p in orphaned_thumbs]
                 thumb_sizes = sum(os.path.getsize(p) for p in orphaned_thumbs if Path(p).exists())
@@ -132,6 +160,16 @@ Examples:
         lr_dir = current_path / '.lr'
         if lr_dir.is_dir():
             orphaned_lr = cleanup_lr(lr_dir, source_stems)
+            
+            # Count LR files in this directory
+            try:
+                lr_count = sum(1 for e in os.scandir(lr_dir) if e.is_file() and e.name.endswith('_LR.jpg'))
+                total_lr_found += lr_count
+                if args.verbose and lr_count > 0:
+                    print(f"    .lr/: {lr_count} LR file(s), {len(orphaned_lr)} orphaned")
+            except:
+                pass
+            
             if orphaned_lr:
                 lr_paths = [str(Path(p).relative_to(root_path)) for p in orphaned_lr]
                 lr_sizes = sum(os.path.getsize(p) for p in orphaned_lr if Path(p).exists())
@@ -142,8 +180,11 @@ Examples:
     
     # Summary before deletion
     print("\n" + "=" * 60)
-    print(f"Found {total_thumbs_deleted} orphaned thumbnail(s) and {total_lr_deleted} orphaned LR file(s)")
-    print(f"Total size to free: {total_bytes_freed / 1024 / 1024:.2f} MB")
+    print(f"Summary:")
+    print(f"  Source files found: {total_source_files}")
+    print(f"  Thumbnails found: {total_thumbs_found} ({total_thumbs_deleted} orphaned)")
+    print(f"  LR files found: {total_lr_found} ({total_lr_deleted} orphaned)")
+    print(f"  Total size to free: {total_bytes_freed / 1024 / 1024:.2f} MB")
     
     if args.dry_run:
         print("\n[Dry run - no files deleted]")
