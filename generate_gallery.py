@@ -632,7 +632,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     
     # Collect slideshow images (recursive)
     slideshow_images = get_slideshow_images(directory, output_dir)
-    slideshow_json = json.dumps(slideshow_images).replace('"', '&quot;')
+    slideshow_json = json.dumps(slideshow_images)  # No HTML escaping needed for script block
     
     # Build gallery grid HTML
     grid_html = ''.join(subdir_items + image_items)
