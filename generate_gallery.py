@@ -125,6 +125,43 @@ def get_subdirectories(directory):
     return sorted(dirs, key=lambda x: os.path.basename(x).lower())
 
 
+def get_slideshow_images(directory, output_dir):
+    """Recursively collect all images for slideshow (current dir + subdirs).
+    Returns list of dicts with image paths and metadata."""
+    images = []
+    
+    def collect_recursive(dir_path, rel_prefix=''):
+        # Get images in current directory
+        for entry in os.scandir(dir_path):
+            if entry.is_file():
+                ext = Path(entry.path).suffix.lower()
+                if ext in IMAGE_EXTENSIONS:
+                    base_name = Path(entry.name).stem
+                    
+                    # Determine lightbox source (LR if available, otherwise full)
+                    lr_dir = Path(output_dir) / rel_prefix.strip('/') / '.lr'
+                    lr_file = lr_dir / f"{base_name}_LR.jpg"
+                    
+                    rel_full = os.path.relpath(entry.path, output_dir).replace(os.sep, '/')
+                    lightbox_src = f"{rel_prefix}.lr/{base_name}_LR.jpg" if lr_file.exists() else rel_full
+                    
+                    images.append({
+                        'full': lightbox_src,
+                        'fullRes': rel_full,
+                        'filename': entry.name
+                    })
+            elif entry.is_dir() and entry.name not in EXCLUDED_DIRS:
+                new_prefix = rel_prefix + entry.name + '/'
+                collect_recursive(entry.path, new_prefix)
+    
+    try:
+        collect_recursive(directory)
+    except (PermissionError, OSError):
+        pass
+    
+    return images
+
+
 def get_exif_data(image_path):
     """Extract EXIF data from image file."""
     exif_data = {
@@ -593,6 +630,10 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     total_images = len(images)
     total_folders = len(subdir_items)
     
+    # Collect slideshow images (recursive)
+    slideshow_images = get_slideshow_images(directory, output_dir)
+    slideshow_json = json.dumps(slideshow_images).replace('"', '&quot;')
+    
     # Build gallery grid HTML
     grid_html = ''.join(subdir_items + image_items)
     
@@ -625,6 +666,16 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         header {{
             margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 15px;
+        }}
+        
+        .header-main {{
+            flex: 1;
+            min-width: 200px;
         }}
         
         h1 {{
@@ -655,6 +706,24 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             margin-top: 10px;
             color: #666;
             font-size: 0.9em;
+        }}
+        
+        /* Slideshow button */
+        .slideshow-btn {{
+            display: inline-block;
+            margin-top: 12px;
+            padding: 8px 16px;
+            background: rgba(79, 195, 247, 0.2);
+            border: 1px solid #4fc3f7;
+            color: #4fc3f7;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85em;
+            transition: all 0.2s;
+        }}
+        
+        .slideshow-btn:hover {{
+            background: rgba(79, 195, 247, 0.3);
         }}
         
         .gallery-grid {{
@@ -974,6 +1043,63 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             opacity: 0.9;
         }}
         
+        /* Slideshow controls overlay */
+        .slideshow-controls {{
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 20px;
+            border-radius: 30px;
+            z-index: 1002;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }}
+        
+        .lightbox.slideshow-active .slideshow-controls {{
+            opacity: 1;
+        }}
+        
+        .slideshow-progress {{
+            color: #fff;
+            font-size: 0.9em;
+            min-width: 80px;
+            text-align: center;
+        }}
+        
+        .slideshow-playpause {{
+            background: none;
+            border: none;
+            color: #4fc3f7;
+            font-size: 1.5em;
+            cursor: pointer;
+            padding: 0 5px;
+            line-height: 1;
+        }}
+        
+        .slideshow-playpause:hover {{
+            color: #fff;
+        }}
+        
+        /* Timer progress bar */
+        .slideshow-timer-bar {{
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            background: #4fc3f7;
+            width: 0%;
+            transition: width 0.1s linear;
+        }}
+        
+        .lightbox.slideshow-active {{
+            cursor: default;
+        }}
+        
         /* EXIF orientation transforms */
         .lightbox-image-container img[data-orientation="6"] {{
             transform: rotate(90deg);
@@ -1045,12 +1171,15 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
 <body>
     <div class="container">
         <header>
-            <h1>{dir_name_safe}</h1>
-            <nav class="breadcrumbs">{breadcrumb_html}</nav>
-            <div class="stats">
-                {total_folders} folder{'s' if total_folders != 1 else ''}, 
-                {total_images} image{'s' if total_images != 1 else ''}
+            <div class="header-main">
+                <h1>{dir_name_safe}</h1>
+                <nav class="breadcrumbs">{breadcrumb_html}</nav>
+                <div class="stats">
+                    {total_folders} folder{'s' if total_folders != 1 else ''}, 
+                    {total_images} image{'s' if total_images != 1 else ''}
+                </div>
             </div>
+            {f'<button class="slideshow-btn" onclick="startSlideshow()">▶ Slideshow ({len(slideshow_images)})</button>' if slideshow_images else ''}
         </header>
         
         <div class="gallery-grid">
@@ -1063,6 +1192,14 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         <span class="lightbox-close">&times;</span>
         <button class="lightbox-nav prev" id="prev-btn">&#10094;</button>
         <button class="lightbox-nav next" id="next-btn">&#10095;</button>
+        
+        <!-- Slideshow controls -->
+        <div class="slideshow-controls" id="slideshow-controls">
+            <span class="slideshow-progress" id="slideshow-progress">1 / 10</span>
+            <button class="slideshow-playpause" id="slideshow-playpause" title="Pause">⏸</button>
+        </div>
+        <div class="slideshow-timer-bar" id="slideshow-timer-bar"></div>
+        
         <div class="lightbox-content-wrapper">
             <div class="lightbox-exif" id="lightbox-exif"></div>
             <div class="lightbox-image-container">
@@ -1089,9 +1226,22 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         const prevBtn = document.getElementById('prev-btn');
         const nextBtn = document.getElementById('next-btn');
         
+        // Slideshow controls
+        const slideshowControls = document.getElementById('slideshow-controls');
+        const slideshowProgress = document.getElementById('slideshow-progress');
+        const slideshowPlaypause = document.getElementById('slideshow-playpause');
+        const slideshowTimerBar = document.getElementById('slideshow-timer-bar');
+        
         // Image navigation state
         let imageList = [];
         let currentIndex = 0;
+        
+        // Slideshow state
+        let slideshowImageList = [];
+        let slideshowIndex = 0;
+        let slideshowInterval = null;
+        let slideshowPlaying = false;
+        const SLIDESHOW_INTERVAL_MS = 3000;  // 3 seconds
         
         // Build image list for navigation
         const images = document.querySelectorAll('.gallery-item img[data-full]');
@@ -1101,6 +1251,16 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             exif: img.getAttribute('data-exif'),
             filename: img.alt || ''
         }}));
+        
+        // Slideshow images data (from server)
+        const slideshowImageData = {slideshow_json};
+        if (slideshowImageData) {{
+            try {{
+                slideshowImageList = JSON.parse(slideshowImageData);
+            }} catch (e) {{
+                console.error('Failed to parse slideshow data:', e);
+            }}
+        }}
         
         // Set lightbox orientation based on image dimensions
         function setOrientation(width, height) {{
@@ -1230,6 +1390,119 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             openLightbox(currentIndex);
         }}
         
+        // ========== Slideshow Functions ==========
+        
+        function startSlideshow() {{
+            if (slideshowImageList.length === 0) {{
+                alert('No images available for slideshow.');
+                return;
+            }}
+            slideshowIndex = 0;
+            slideshowPlaying = true;
+            lightbox.classList.add('slideshow-active');
+            updateSlideshowPlayPauseIcon();
+            openSlideshowImage(slideshowIndex);
+            startSlideshowTimer();
+        }}
+        
+        function stopSlideshow() {{
+            slideshowPlaying = false;
+            lightbox.classList.remove('slideshow-active');
+            stopSlideshowTimer();
+            slideshowControls.style.display = 'none';
+        }}
+        
+        function openSlideshowImage(index) {{
+            if (index < 0 || index >= slideshowImageList.length) return;
+            
+            slideshowIndex = index;
+            const imageData = slideshowImageList[index];
+            
+            lightbox.classList.remove('active', 'portrait', 'landscape');
+            lightbox.classList.add('landscape');
+            slideshowControls.style.display = 'flex';
+            
+            const newSrc = imageData.full;
+            if (lightboxImg.src === newSrc) {{
+                if (lightboxImg.naturalWidth && lightboxImg.naturalHeight) {{
+                    setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
+                    lightbox.classList.add('active');
+                    document.body.style.overflow = 'hidden';
+                    updateSlideshowProgress();
+                }}
+            }} else {{
+                lightboxImg.onload = function() {{
+                    setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
+                    lightbox.classList.add('active');
+                    document.body.style.overflow = 'hidden';
+                    updateSlideshowProgress();
+                }};
+                lightboxImg.src = newSrc;
+            }}
+            
+            lightboxFilename.textContent = imageData.filename || '';
+            lightboxExif.innerHTML = '';
+            lightboxImg.removeAttribute('data-orientation');
+        }}
+        
+        function slideshowNext() {{
+            slideshowIndex = (slideshowIndex + 1) % slideshowImageList.length;
+            openSlideshowImage(slideshowIndex);
+            resetSlideshowTimer();
+        }}
+        
+        function toggleSlideshowPlayPause() {{
+            slideshowPlaying = !slideshowPlaying;
+            updateSlideshowPlayPauseIcon();
+            if (slideshowPlaying) {{
+                startSlideshowTimer();
+            }} else {{
+                stopSlideshowTimer();
+            }}
+        }}
+        
+        function updateSlideshowPlayPauseIcon() {{
+            slideshowPlaypause.textContent = slideshowPlaying ? '⏸' : '▶';
+            slideshowPlaypause.title = slideshowPlaying ? 'Pause' : 'Play';
+        }}
+        
+        function updateSlideshowProgress() {{
+            slideshowProgress.textContent = `${{slideshowIndex + 1}} / ${{slideshowImageList.length}}`;
+        }}
+        
+        function startSlideshowTimer() {{
+            if (slideshowInterval) return;
+            
+            let elapsed = 0;
+            const step = 50;  // Update every 50ms
+            
+            slideshowInterval = setInterval(() => {{
+                elapsed += step;
+                const progress = Math.min((elapsed / SLIDESHOW_INTERVAL_MS) * 100, 100);
+                slideshowTimerBar.style.width = progress + '%';
+                
+                if (elapsed >= SLIDESHOW_INTERVAL_MS && slideshowPlaying) {{
+                    slideshowNext();
+                    elapsed = 0;
+                }}
+            }}, step);
+        }}
+        
+        function stopSlideshowTimer() {{
+            if (slideshowInterval) {{
+                clearInterval(slideshowInterval);
+                slideshowInterval = null;
+            }}
+            slideshowTimerBar.style.width = '0%';
+        }}
+        
+        function resetSlideshowTimer() {{
+            stopSlideshowTimer();
+            if (slideshowPlaying) {{
+                startSlideshowTimer();
+            }}
+        }}
+        
         // Click on thumbnails to open lightbox
         images.forEach((img, index) => {{
             img.addEventListener('click', (e) => {{
@@ -1242,16 +1515,33 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         // Navigation buttons
         prevBtn.addEventListener('click', (e) => {{
             e.stopPropagation();
-            showPrev();
+            if (lightbox.classList.contains('slideshow-active')) {{
+                slideshowIndex = (slideshowIndex - 1 + slideshowImageList.length) % slideshowImageList.length;
+                openSlideshowImage(slideshowIndex);
+                resetSlideshowTimer();
+            }} else {{
+                showPrev();
+            }}
         }});
         
         nextBtn.addEventListener('click', (e) => {{
             e.stopPropagation();
-            showNext();
+            if (lightbox.classList.contains('slideshow-active')) {{
+                slideshowNext();
+            }} else {{
+                showNext();
+            }}
+        }});
+        
+        // Slideshow play/pause button
+        slideshowPlaypause.addEventListener('click', (e) => {{
+            e.stopPropagation();
+            toggleSlideshowPlayPause();
         }});
         
         // Close lightbox
         function closeLightbox() {{
+            stopSlideshow();
             lightbox.classList.remove('active');
             lightbox.classList.remove('portrait');
             lightbox.classList.remove('landscape');
@@ -1264,8 +1554,21 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         closeBtn.addEventListener('click', closeLightbox);
         
         lightbox.addEventListener('click', (e) => {{
+            // Don't advance if clicking on controls, buttons, or image itself
+            const isControlClick = e.target.closest('.slideshow-controls') || 
+                                   e.target.closest('.lightbox-nav') ||
+                                   e.target.closest('.lightbox-close') ||
+                                   e.target.tagName === 'IMG';
+            
+            if (isControlClick) return;
+            
             if (e.target === lightbox || e.target.classList.contains('lightbox-image-container')) {{
-                closeLightbox();
+                if (lightbox.classList.contains('slideshow-active')) {{
+                    // In slideshow mode, clicking advances to next image
+                    slideshowNext();
+                }} else {{
+                    closeLightbox();
+                }}
             }}
         }});
         
@@ -1278,10 +1581,26 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                     closeLightbox();
                     break;
                 case 'ArrowLeft':
-                    showPrev();
+                    if (lightbox.classList.contains('slideshow-active')) {{
+                        slideshowIndex = (slideshowIndex - 1 + slideshowImageList.length) % slideshowImageList.length;
+                        openSlideshowImage(slideshowIndex);
+                        resetSlideshowTimer();
+                    }} else {{
+                        showPrev();
+                    }}
                     break;
                 case 'ArrowRight':
-                    showNext();
+                    if (lightbox.classList.contains('slideshow-active')) {{
+                        slideshowNext();
+                    }} else {{
+                        showNext();
+                    }}
+                    break;
+                case ' ':
+                    if (lightbox.classList.contains('slideshow-active')) {{
+                        e.preventDefault();
+                        toggleSlideshowPlayPause();
+                    }}
                     break;
             }}
         }});
