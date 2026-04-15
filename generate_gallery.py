@@ -1255,11 +1255,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         // Slideshow images data (from server)
         const slideshowImageData = {slideshow_json};
         if (slideshowImageData) {{
-            try {{
-                slideshowImageList = JSON.parse(slideshowImageData);
-            }} catch (e) {{
-                console.error('Failed to parse slideshow data:', e);
-            }}
+            slideshowImageList = slideshowImageData;
         }}
         
         // Set lightbox orientation based on image dimensions
