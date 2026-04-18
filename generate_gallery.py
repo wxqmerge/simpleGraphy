@@ -249,6 +249,79 @@ def get_subdirectory_list(directory):
     return sorted(dirs)
 
 
+def collect_dirs_with_images(root_path):
+    """Collect all directories with images in DFS order."""
+    result = []
+    
+    def scan(path):
+        images = get_image_files(path)
+        if images:
+            result.append(path)
+        try:
+            dirs = sorted(os.listdir(path))
+            for d in dirs:
+                if d not in EXCLUDED_DIRS:
+                    full_path = os.path.join(path, d)
+                    if os.path.isdir(full_path):
+                        scan(full_path)
+        except (PermissionError, OSError):
+            pass
+    
+    scan(root_path)
+    return result
+
+
+def get_sibling_nav(current_dir, all_dirs_with_images, root_path):
+    """Get relative paths to previous and next sibling directories at same parent level."""
+    rel = os.path.relpath(current_dir, root_path).replace(os.sep, '/')
+    
+    if rel == '.':
+        return '', ''
+    
+    parts = rel.split('/')
+    parent_rel = '/'.join(parts[:-1]) if len(parts) > 1 else '.'
+    
+    # Find all directories under this parent that have images
+    siblings = []
+    for d in all_dirs_with_images:
+        d_rel = os.path.relpath(d, root_path).replace(os.sep, '/')
+        d_parts = d_rel.split('/')
+        d_parent = '/'.join(d_parts[:-1]) if len(d_parts) > 1 else '.'
+        if d_parent == parent_rel:
+            siblings.append(d)
+    
+    if len(siblings) <= 1:
+        return '', ''
+    
+    # Sort by directory name (case-insensitive)
+    siblings.sort(key=lambda p: os.path.basename(p).lower())
+    
+    # Find current index
+    current_index = -1
+    for i, sib in enumerate(siblings):
+        if os.path.abspath(sib) == os.path.abspath(current_dir):
+            current_index = i
+            break
+    
+    if current_index < 0:
+        return '', ''
+    
+    # Build relative paths from current page (go up to parent, then into sibling)
+    up = '../' * (len(parts) - 1)
+    
+    prev_path = ''
+    if current_index > 0:
+        prev_name = os.path.basename(siblings[current_index - 1])
+        prev_path = up + prev_name + '/'
+    
+    next_path = ''
+    if current_index < len(siblings) - 1:
+        next_name = os.path.basename(siblings[current_index + 1])
+        next_path = up + next_name + '/'
+    
+    return prev_path, next_path
+
+
 def generate_slideshow_json(directory, output_dir):
     """Generate slideshow.json for a directory."""
     json_data = {
@@ -604,7 +677,7 @@ def generate_thumbnail(source_path, thumb_path, thumb_size):
         return False
 
 
-def generate_html(directory, output_dir, root_path, thumb_size, force=False, parent_path=None, random_depth=None, enable_slideshow=False, enable_random=False):
+def generate_html(directory, output_dir, root_path, thumb_size, force=False, parent_path=None, random_depth=None, enable_slideshow=False, enable_random=False, browse_prev='', browse_next=''):
     """Generate index.html for a directory."""
     images = get_image_files(directory)
     subdirs = get_subdirectories(directory)
@@ -864,6 +937,40 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             randomPool = randomPoolData;
         }'''
     
+   # Browse mode directory navigation (sibling-level)
+    browse_dir_nav_block = ''
+    if browse_prev or browse_next:
+        browse_dir_nav_block = '''// Browse mode sibling directory navigation
+        const browsePrevPath = ''' + json.dumps(browse_prev) + ''';
+        const browseNextPath = ''' + json.dumps(browse_next) + ''';
+        
+        document.addEventListener('DOMContentLoaded', function() {{
+            const prevBtn = document.getElementById('browse-dir-prev');
+            const nextBtn = document.getElementById('browse-dir-next');
+            
+            if (prevBtn) {{
+                if (!browsePrevPath) {{
+                    prevBtn.classList.add('disabled');
+                }} else {{
+                    prevBtn.addEventListener('click', function(e) {{
+                        e.preventDefault();
+                        window.location.href = browsePrevPath;
+                    }});
+                }}
+            }}
+            
+            if (nextBtn) {{
+                if (!browseNextPath) {{
+                    nextBtn.classList.add('disabled');
+                }} else {{
+                    nextBtn.addEventListener('click', function(e) {{
+                        e.preventDefault();
+                        window.location.href = browseNextPath;
+                    }});
+                }}
+            }}
+        }});'''
+    
     # Generate complete HTML
     html_content = f'''<!DOCTYPE html>
 <html lang="en">
@@ -909,6 +1016,37 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             font-size: 2em;
             margin-bottom: 15px;
             color: #fff;
+        }}
+        
+        .browse-dir-nav {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }}
+        
+        .browse-dir-btn {{
+            background: none;
+            border: 1px solid #444;
+            color: #4fc3f7;
+            font-size: 1.2em;
+            cursor: pointer;
+            padding: 4px 8px;
+            line-height: 1;
+            opacity: 0.5;
+            transition: opacity 0.2s, color 0.2s, border-color 0.2s;
+            border-radius: 3px;
+        }}
+        
+        .browse-dir-btn:hover {{
+            opacity: 1;
+            color: #fff;
+            border-color: #4fc3f7;
+        }}
+        
+        .browse-dir-btn.disabled {{
+            visibility: hidden;
+            pointer-events: none;
         }}
         
         .breadcrumbs {{
@@ -1478,7 +1616,11 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     <div class="container">
         <header>
             <div class="header-main">
-                <h1>{dir_name_safe}</h1>
+                <div class="browse-dir-nav">
+                    <button class="browse-dir-btn" id="browse-dir-prev" title="Previous Directory">&#8592;</button>
+                    <h1>{dir_name_safe}</h1>
+                    <button class="browse-dir-btn" id="browse-dir-next" title="Next Directory">&#8594;</button>
+                </div>
                 <nav class="breadcrumbs">{breadcrumb_html}</nav>
                 <div class="stats">
                     {total_folders} folder{'s' if total_folders != 1 else ''}, 
@@ -1582,11 +1724,13 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             filename: img.alt || ''
         }}));
         
-     {sequential_js_block}
-        
-        {random_js_block}
-        
-        // Set lightbox orientation based on image dimensions
+       {sequential_js_block}
+         
+         {random_js_block}
+         
+         {browse_dir_nav_block}
+         
+         // Set lightbox orientation based on image dimensions
         function setOrientation(width, height) {{
             if (height > width) {{
                 lightbox.classList.add('portrait');
@@ -2162,7 +2306,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             }}
         }});
         
-        dirNextBtn.addEventListener('click', (e) => {{
+      dirNextBtn.addEventListener('click', (e) => {{
             e.stopPropagation();
             if (currentMode === 'sequential') {{
                 dirNavNext();
@@ -2258,7 +2402,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         return False
 
 
-def process_directory(directory, output_dir, root_path, thumb_size, force, random_depth=None, enable_slideshow=False, enable_random=False):
+def process_directory(directory, output_dir, root_path, thumb_size, force, random_depth=None, enable_slideshow=False, enable_random=False, browse_prev='', browse_next=''):
     """Process a single directory and generate its index.html and slideshow.json."""
     images = get_image_files(directory)
     subdirs = get_subdirectories(directory)
@@ -2270,7 +2414,7 @@ def process_directory(directory, output_dir, root_path, thumb_size, force, rando
     print(f"  Processing: {os.path.relpath(directory, root_path) or 'root'}")
     
     success = 0
-    if generate_html(directory, output_dir, root_path, thumb_size, force=force, random_depth=random_depth, enable_slideshow=enable_slideshow, enable_random=enable_random):
+    if generate_html(directory, output_dir, root_path, thumb_size, force=force, random_depth=random_depth, enable_slideshow=enable_slideshow, enable_random=enable_random, browse_prev=browse_prev, browse_next=browse_next):
         success += 1
     
     # Only generate slideshow.json if slideshow features are enabled
@@ -2389,8 +2533,10 @@ def walk_and_generate(root_path, output_root, thumb_size, force, random_depth=No
     """Recursively walk directory tree and generate galleries."""
     total_pages = 0
     
+    # Collect all directories with images (for sibling navigation)
+    all_dirs_with_images = collect_dirs_with_images(root_path)
+    
     # Process directories in depth-first order (bottom-up)
-    # This ensures we process leaf directories first
     to_process = []
     
     def collect_dirs(path, depth=0):
@@ -2417,7 +2563,10 @@ def walk_and_generate(root_path, output_root, thumb_size, force, random_depth=No
         # Ensure output directory exists
         os.makedirs(output_dir, exist_ok=True)
         
-        pages = process_directory(dir_path, output_dir, root_path, thumb_size, force, random_depth, enable_slideshow, enable_random)
+        # Get sibling navigation for this directory
+        browse_prev, browse_next = get_sibling_nav(dir_path, all_dirs_with_images, root_path)
+        
+        pages = process_directory(dir_path, output_dir, root_path, thumb_size, force, random_depth, enable_slideshow, enable_random, browse_prev=browse_prev, browse_next=browse_next)
         total_pages += pages
     
     print("-" * 50)
