@@ -8,6 +8,7 @@ have corresponding source images (e.g., after deleting photos).
 Usage:
     python cleanup_gallery.py galleries/
     python cleanup_gallery.py galleries/ --dry-run   # Preview only
+    python cleanup_gallery.py galleries/ --all        # Remove all generated files
 """
 
 import argparse
@@ -78,6 +79,7 @@ def main():
 Examples:
   python cleanup_gallery.py galleries/           # Delete orphaned files
   python cleanup_gallery.py galleries/ --dry-run # Preview what would be deleted
+  python cleanup_gallery.py galleries/ --all     # Remove all generated files
 """
     )
     
@@ -100,6 +102,12 @@ Examples:
         help='Show detailed source file counts per directory'
     )
     
+    parser.add_argument(
+        '--all',
+        action='store_true',
+        help='Remove ALL generated files (index.html, .thumbs/, .lr/, slideshow.json)'
+    )
+    
     args = parser.parse_args()
     root_path = Path(args.root).resolve()
     
@@ -107,7 +115,10 @@ Examples:
         print(f"Error: Directory not found: {root_path}")
         return 1
     
-    # Counters
+    if args.all:
+        return cleanup_all(root_path, args.dry_run)
+    
+    # Original orphan cleanup mode
     total_source_files = 0
     total_thumbs_found = 0
     total_lr_found = 0
@@ -226,6 +237,101 @@ Examples:
     print(f"  - {total_thumbs_deleted} thumbnail(s)")
     print(f"  - {total_lr_deleted} LR file(s)")
     print(f"  - Freed {total_bytes_freed / 1024 / 1024:.2f} MB")
+    
+    return 0
+
+
+def cleanup_all(root_path, dry_run=False):
+    """Remove ALL generated files and directories."""
+    deleted_files = []
+    deleted_dirs = []
+    total_freed = 0
+    
+    print(f"Removing all generated files from: {root_path}")
+    print("-" * 60)
+    
+    # Walk through all directories
+    for dirpath, dirnames, filenames in os.walk(root_path, topdown=False):
+        current_path = Path(dirpath)
+        rel_path = current_path.relative_to(root_path)
+        
+        # Skip hidden directories (except .git which we don't touch)
+        if any(part.startswith('.') and part not in {'.git'} for part in rel_path.parts):
+            continue
+        
+        # Remove index.html files
+        if 'index.html' in filenames:
+            html_file = current_path / 'index.html'
+            try:
+                size = os.path.getsize(html_file)
+                if not dry_run:
+                    html_file.unlink()
+                deleted_files.append((html_file, size))
+                total_freed += size
+            except OSError as e:
+                print(f"  [ERROR] Failed to delete {html_file}: {e}")
+        
+        # Remove slideshow.json files
+        if 'slideshow.json' in filenames:
+            json_file = current_path / 'slideshow.json'
+            try:
+                size = os.path.getsize(json_file)
+                if not dry_run:
+                    json_file.unlink()
+                deleted_files.append((json_file, size))
+                total_freed += size
+            except OSError as e:
+                print(f"  [ERROR] Failed to delete {json_file}: {e}")
+        
+        # Remove .thumbs directories
+        thumbs_dir = current_path / '.thumbs'
+        if thumbs_dir.is_dir():
+            try:
+                thumb_size = sum(
+                    os.path.getsize(os.path.join(dirpath2, f))
+                    for dirpath2, _, files in os.walk(thumbs_dir)
+                    for f in files
+                )
+                if not dry_run:
+                    import shutil
+                    shutil.rmtree(thumbs_dir)
+                deleted_dirs.append((thumbs_dir, thumb_size))
+                total_freed += thumb_size
+            except OSError as e:
+                print(f"  [ERROR] Failed to delete {thumbs_dir}: {e}")
+        
+        # Remove .lr directories
+        lr_dir = current_path / '.lr'
+        if lr_dir.is_dir():
+            try:
+                lr_size = sum(
+                    os.path.getsize(os.path.join(dirpath2, f))
+                    for dirpath2, _, files in os.walk(lr_dir)
+                    for f in files
+                )
+                if not dry_run:
+                    import shutil
+                    shutil.rmtree(lr_dir)
+                deleted_dirs.append((lr_dir, lr_size))
+                total_freed += lr_size
+            except OSError as e:
+                print(f"  [ERROR] Failed to delete {lr_dir}: {e}")
+    
+    # Summary
+    print("\n" + "=" * 60)
+    print("Summary:")
+    print(f"  Files deleted: {len(deleted_files)}")
+    for f, size in deleted_files:
+        print(f"    - {f.relative_to(root_path)} ({size:,} bytes)")
+    print(f"  Directories removed: {len(deleted_dirs)}")
+    for d, size in deleted_dirs:
+        print(f"    - {d.relative_to(root_path)} ({size:,} bytes)")
+    print(f"  Total freed: {total_freed / 1024 / 1024:.2f} MB")
+    
+    if dry_run:
+        print("\n[Dry run - no files deleted]")
+    else:
+        print("\nDone! All generated files removed.")
     
     return 0
 
