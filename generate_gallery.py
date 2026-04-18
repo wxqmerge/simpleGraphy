@@ -807,6 +807,18 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         random_pool = []
         random_json = '[]'
     
+    # Sequential fallback: embedded recursive pool when no direct images
+    if enable_slideshow and not sequential_images:
+        shared_recursive = random_pool if enable_random else get_random_pool(directory, output_dir, max_depth=random_depth)
+        sequential_recursive_pool = shared_recursive
+        sequential_recursive_json = json.dumps(shared_recursive, separators=(',', ':'))
+    elif enable_slideshow:
+        sequential_recursive_pool = []
+        sequential_recursive_json = '[]'
+    else:
+        sequential_recursive_pool = []
+        sequential_recursive_json = '[]'
+    
     # Build gallery grid HTML
     grid_html = ''.join(subdir_items + image_items)
     
@@ -1393,8 +1405,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                     {total_images} image{'s' if total_images != 1 else ''}
                 </div>
             </div>
-            {f'''<div class="slideshow-header">
-                {f'<button class="slideshow-btn" onclick="startSlideshow(\'sequential\')">▶ Slideshow ({len(sequential_images)})</button>' if sequential_images else ''}
+            {f'''         <div class="slideshow-header">
+                {f'<button class="slideshow-btn" onclick="startSlideshow(\'sequential\')">▶ Slideshow ({len(sequential_images) if sequential_images else len(sequential_recursive_pool)})</button>' if enable_slideshow and (sequential_images or sequential_recursive_pool) else ''}
                 {f'<button class="slideshow-btn random-btn" onclick="startSlideshow(\'random\')">🎲 Random ({len(random_pool)})</button>' if random_pool else ''}
                 <div class="slideshow-options">
                     <label><input type="checkbox" id="fullres-check"> Full Res</label>
@@ -1485,9 +1497,15 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         }}));
         
      {f'''// Sequential slideshow images (current directory only)
-        const sequentialImageData = {sequential_json};
+        let sequentialImageData = {sequential_json};
         if (sequentialImageData) {{
             sequentialImageList = sequentialImageData;
+        }}
+
+        // Recursive pool as fallback when no direct images
+        const sequentialRecursivePoolData = {sequential_recursive_json};
+        if (sequentialRecursivePoolData && sequentialRecursivePoolData.length > 0) {{
+            window._sequentialRecursivePool = sequentialRecursivePoolData;
         }}
 
         // Subdirectories for depth-first traversal
@@ -1694,16 +1712,23 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         function startSlideshow(mode) {{
             if (mode === 'sequential') {{
-                if (sequentialImageList.length === 0) {{
-                    alert('No images available for slideshow.');
-                    return;
-                }}
                 currentMode = 'sequential';
                 slideshowIndex = 0;
                 
                 currentDirPath = '';
                 subdirQueue = [];
                 subdirIndex = 0;
+                
+                // If current dir has no images, use embedded recursive pool
+                if (sequentialImageList.length === 0) {{
+                    if (window._sequentialRecursivePool && window._sequentialRecursivePool.length > 0) {{
+                        console.log('No direct images, using recursive pool:', window._sequentialRecursivePool.length);
+                        sequentialImageList = window._sequentialRecursivePool;
+                    }} else {{
+                        alert('No images available for slideshow.');
+                        return;
+                    }}
+                }}
                 
             }} else if (mode === 'random') {{
                 if (randomPool.length === 0) {{
