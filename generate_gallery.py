@@ -1465,11 +1465,12 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         let slideshowPlaying = false;
         const SLIDESHOW_INTERVAL_MS = 3000;
         
-        // Sequential traversal state (depth-first)
+       // Sequential traversal state (depth-first)
         let currentDirPath = '';
         let subdirQueue = [];
         let currentSubdirs = [];
         let subdirIndex = 0;
+        const subdirCache = new Map();
         
         // Options
         let useFullRes = false;
@@ -1640,20 +1641,38 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             }}
         }}
         
-        async function loadNextDirectory() {{
+       async function loadNextDirectory() {{
             while (subdirIndex < currentSubdirs.length) {{
                 const subdir = currentSubdirs[subdirIndex];
-                subdirIndex++;
                 
                 console.log('Loading subdir:', subdir);
-                const data = await fetchDirectoryData(subdir + '/');
                 
-                if (data && data.images && data.images.length > 0) {{
-                    currentDirPath = subdir + '/';
-                    sequentialImageList = data.images;
-                    slideshowIndex = 0;
+                // Use cache if available, otherwise fetch
+                let data;
+                if (subdirCache.has(subdir)) {{
+                    data = subdirCache.get(subdir);
+                }} else {{
+                    data = await fetchDirectoryData(subdir + '/');
+                    if (data) subdirCache.set(subdir, data);
+                }}
+                
+                // Enter directory if it has images OR has subdirectories to traverse
+                const hasImages = data && data.images && data.images.length > 0;
+                const hasChildren = data && data.subdirs && data.subdirs.length > 0;
+                
+                if (hasImages || hasChildren) {{
+                    // Save parent state for when we return from children
+                    subdirQueue.push({{ dirs: currentSubdirs.slice(), index: subdirIndex + 1 }});
+                    subdirIndex++;
                     
-                    subdirQueue.push({{ dirs: currentSubdirs, index: subdirIndex }});
+                    currentDirPath = subdir + '/';
+                    subdirCache.set(subdir, data);
+                    
+                    if (hasImages) {{
+                        sequentialImageList = data.images;
+                        slideshowIndex = 0;
+                    }}
+                    
                     currentSubdirs = data.subdirs || [];
                     subdirIndex = 0;
                     
@@ -1666,7 +1685,6 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 const parentState = subdirQueue.pop();
                 currentSubdirs = parentState.dirs;
                 subdirIndex = parentState.index;
-                currentDirPath = currentDirPath.split('/').slice(0, -2).join('/') + '/';
                 
                 return await loadNextDirectory();
             }}
@@ -1685,7 +1703,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 
                 currentDirPath = '';
                 subdirQueue = [];
-                subdirIndex = 1;
+                subdirIndex = 0;
                 
             }} else if (mode === 'random') {{
                 if (randomPool.length === 0) {{
@@ -1962,8 +1980,11 @@ def process_directory(directory, output_dir, root_path, thumb_size, force, rando
     success = 0
     if generate_html(directory, output_dir, root_path, thumb_size, force=force, random_depth=random_depth, enable_slideshow=enable_slideshow, enable_random=enable_random):
         success += 1
-    if generate_slideshow_json(directory, output_dir):
-        success += 1
+    
+    # Only generate slideshow.json if slideshow features are enabled
+    if enable_slideshow or enable_random:
+        if generate_slideshow_json(directory, output_dir):
+            success += 1
     
     return success
 
