@@ -2213,50 +2213,71 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             slideshowControls.style.display = 'flex';
             document.body.style.overflow = 'hidden';
             
-            // Update orientation without removing active class to prevent flicker
             const newSrc = imageData.full;
-            if (lightboxImg.src === newSrc) {{
-                if (lightboxImg.naturalWidth && lightboxImg.naturalHeight) {{
-                    setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
-                    updateSlideshowProgress();
-                }}
-            }} else {{
-                lightboxImg.onload = function() {{
-                    setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
-                    updateSlideshowProgress();
-                }};
-                lightboxImg.onerror = function() {{
-                    console.error('Failed to load slideshow image:', newSrc);
-                    lightboxFilename.textContent = (imageData.filename || '') + ' [failed to load]';
-                }};
-                lightboxImg.src = newSrc;
-            }}
-            
-            lightboxFilename.textContent = imageData.filename || '';
-            lightboxExif.innerHTML = '';
-            lightboxImg.removeAttribute('data-orientation');
-            
-            // Set up click handler for full-res if available (same as openLightbox)
-            const hasFullRes = imageData.fullRes && imageData.fullRes !== imageData.full;
-            if (hasFullRes) {{
-                lightboxImg.style.cursor = 'pointer';
-                lightboxFilename.innerHTML = `${{imageData.filename || ''}} <span style="color:#4fc3f7;font-size:0.85em;margin-left:8px">(click image for original)</span>`;
-                lightboxImg.onclick = function(e) {{
-                    e.stopPropagation();
-                    const a = document.createElement('a');
-                    a.href = imageData.fullRes;
-                    a.target = '_blank';
-                    a.rel = 'noopener noreferrer';
-                    a.style.display = 'none';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                }};
-            }} else {{
-                lightboxImg.style.cursor = 'default';
-                lightboxImg.onclick = null;
+            if (lightboxImg.src === newSrc && lightboxImg.naturalWidth) {{
+                setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
+                updateSlideshowProgress();
                 lightboxFilename.textContent = imageData.filename || '';
+                lightboxExif.innerHTML = '';
+                lightboxImg.removeAttribute('data-orientation');
+                const hasFullRes = imageData.fullRes && imageData.fullRes !== imageData.full;
+                if (hasFullRes) {{
+                    lightboxImg.style.cursor = 'pointer';
+                    lightboxFilename.innerHTML = `${{imageData.filename || ''}} <span style="color:#4fc3f7;font-size:0.85em;margin-left:8px">(click image for original)</span>`;
+                    lightboxImg.onclick = function(e) {{
+                        e.stopPropagation();
+                        const a = document.createElement('a');
+                        a.href = imageData.fullRes;
+                        a.target = '_blank';
+                        a.rel = 'noopener noreferrer';
+                        a.style.display = 'none';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }};
+                }} else {{
+                    lightboxImg.style.cursor = 'default';
+                    lightboxImg.onclick = null;
+                    lightboxFilename.textContent = imageData.filename || '';
+                }}
+                return;
             }}
+            
+            const tempImg = new Image();
+            tempImg.onload = function() {{
+                lightboxImg.src = newSrc;
+                setOrientation(tempImg.naturalWidth, tempImg.naturalHeight);
+                updateSlideshowProgress();
+                lightboxFilename.textContent = imageData.filename || '';
+                lightboxExif.innerHTML = '';
+                lightboxImg.removeAttribute('data-orientation');
+                const hasFullRes = imageData.fullRes && imageData.fullRes !== imageData.full;
+                if (hasFullRes) {{
+                    lightboxImg.style.cursor = 'pointer';
+                    lightboxFilename.innerHTML = `${{imageData.filename || ''}} <span style="color:#4fc3f7;font-size:0.85em;margin-left:8px">(click image for original)</span>`;
+                    lightboxImg.onclick = function(e) {{
+                        e.stopPropagation();
+                        const a = document.createElement('a');
+                        a.href = imageData.fullRes;
+                        a.target = '_blank';
+                        a.rel = 'noopener noreferrer';
+                        a.style.display = 'none';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }};
+                }} else {{
+                    lightboxImg.style.cursor = 'default';
+                    lightboxImg.onclick = null;
+                    lightboxFilename.textContent = imageData.filename || '';
+                }}
+            }};
+            tempImg.onerror = function() {{
+                console.error('Failed to preload slideshow image:', newSrc);
+                lightboxImg.src = newSrc;
+                lightboxFilename.textContent = (imageData.filename || '') + ' [failed to load]';
+            }};
+            tempImg.src = newSrc;
         }}
         
         async function slideshowNext() {{
