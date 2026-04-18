@@ -146,6 +146,13 @@ Output Structure:
         help='Force rebuild all thumbnails even if they exist'
     )
     
+    parser.add_argument(
+        '--random-depth', '-d',
+        type=int,
+        default=None,
+        help='Max recursion depth for random slideshow pool (default: unlimited)'
+    )
+    
     return parser.parse_args()
 
 
@@ -180,40 +187,112 @@ def get_subdirectories(directory):
 
 
 def get_slideshow_images(directory, output_dir):
-    """Recursively collect all images for slideshow (current dir + subdirs).
+    """Collect images from current directory only (non-recursive).
     Returns list of dicts with image paths and metadata."""
     images = []
     
-    def collect_recursive(dir_path, rel_prefix=''):
-        # Get images in current directory
-        for entry in os.scandir(dir_path):
+    try:
+        for entry in os.scandir(directory):
             if entry.is_file():
                 ext = Path(entry.path).suffix.lower()
                 if ext in IMAGE_EXTENSIONS:
                     base_name = Path(entry.name).stem
                     
-                    # Determine lightbox source (LR if available, otherwise full)
-                    lr_dir = Path(output_dir) / rel_prefix.strip('/') / '.lr'
+                    # Determine lightbox source (LR if available)
+                    lr_dir = Path(output_dir) / '.lr'
                     lr_file = lr_dir / f"{base_name}_LR.jpg"
                     
-                    rel_full = os.path.relpath(entry.path, output_dir).replace(os.sep, '/')
-                    lightbox_src = f"{rel_prefix}.lr/{base_name}_LR.jpg" if lr_file.exists() else rel_full
+                    rel_full = entry.name
+                    lightbox_src = f'.lr/{base_name}_LR.jpg' if lr_file.exists() else rel_full
                     
                     images.append({
                         'full': lightbox_src,
                         'fullRes': rel_full,
                         'filename': entry.name
                     })
-            elif entry.is_dir() and entry.name not in EXCLUDED_DIRS:
-                new_prefix = rel_prefix + entry.name + '/'
-                collect_recursive(entry.path, new_prefix)
-    
-    try:
-        collect_recursive(directory)
     except (PermissionError, OSError):
         pass
     
-    return images
+    return sorted(images, key=lambda x: x['filename'].lower())
+
+
+def get_subdirectory_list(directory):
+    """Get list of subdirectories for slideshow traversal."""
+    dirs = []
+    
+    try:
+        for entry in os.scandir(directory):
+            if entry.is_dir() and entry.name not in EXCLUDED_DIRS:
+                dirs.append(entry.name)
+    except (PermissionError, OSError):
+        pass
+    
+    return sorted(dirs)
+
+
+def generate_slideshow_json(directory, output_dir):
+    """Generate slideshow.json for a directory."""
+    json_data = {
+        'images': get_slideshow_images(directory, output_dir),
+        'subdirs': get_subdirectory_list(directory)
+    }
+    
+    json_file = os.path.join(output_dir, 'slideshow.json')
+    
+    try:
+        with open(json_file, 'w', encoding='utf-8') as f:
+            json.dump(json_data, f, separators=(',', ':'))
+        return True
+    except IOError as e:
+        print(f"  [ERROR] Failed to write {json_file}: {e}")
+        return False
+
+
+def get_random_pool(root_dir, output_root, max_depth=None):
+    """Collect all images recursively for random slideshow.
+    
+    Args:
+        root_dir: Root directory to start from
+        output_root: Output root for path calculation
+        max_depth: Maximum recursion depth (None = unlimited)
+    
+    Returns:
+        List of dicts with 'full', 'fullRes', 'filename'
+    """
+    pool = []
+    
+    def collect_recursive(dir_path, rel_prefix='', depth=0):
+        if max_depth is not None and depth > max_depth:
+            return
+            
+        for entry in os.scandir(dir_path):
+            if entry.is_file():
+                ext = Path(entry.path).suffix.lower()
+                if ext in IMAGE_EXTENSIONS:
+                    base_name = Path(entry.name).stem
+                    
+                    # Determine lightbox source (LR if available)
+                    lr_dir = Path(output_root) / rel_prefix.strip('/') / '.lr'
+                    lr_file = lr_dir / f"{base_name}_LR.jpg"
+                    
+                    rel_full = os.path.relpath(entry.path, output_root).replace(os.sep, '/')
+                    lightbox_src = f"{rel_prefix}.lr/{base_name}_LR.jpg" if lr_file.exists() else rel_full
+                    
+                    pool.append({
+                        'full': lightbox_src,
+                        'fullRes': rel_full,
+                        'filename': entry.name
+                    })
+            elif entry.is_dir() and entry.name not in EXCLUDED_DIRS:
+                new_prefix = rel_prefix + entry.name + '/'
+                collect_recursive(entry.path, new_prefix, depth + 1)
+    
+    try:
+        collect_recursive(root_dir)
+    except (PermissionError, OSError):
+        pass
+    
+    return pool
 
 
 def get_exif_data(image_path):
@@ -506,7 +585,7 @@ def generate_thumbnail(source_path, thumb_path, thumb_size):
         return False
 
 
-def generate_html(directory, output_dir, root_path, thumb_size, force=False, parent_path=None):
+def generate_html(directory, output_dir, root_path, thumb_size, force=False, parent_path=None, random_depth=None):
     """Generate index.html for a directory."""
     images = get_image_files(directory)
     subdirs = get_subdirectories(directory)
@@ -691,10 +770,16 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     total_images = len(images)
     total_folders = len(subdir_items)
     
-    # Collect slideshow images (recursive)
-    slideshow_images = get_slideshow_images(directory, output_dir)
-    # Use compact JSON format to reduce file size
-    slideshow_json = json.dumps(slideshow_images, separators=(',', ':'))
+    # Sequential slideshow: only current directory (non-recursive)
+    sequential_images = get_slideshow_images(directory, output_dir)
+    sequential_json = json.dumps(sequential_images, separators=(',', ':'))
+    
+    # Random slideshow pool: recursive from this directory
+    random_pool = get_random_pool(directory, output_dir, max_depth=random_depth)
+    random_json = json.dumps(random_pool, separators=(',', ':'))
+    
+    # Subdirectories for depth-first traversal
+    subdirs_list = get_subdirectory_list(directory)
     
     # Build gallery grid HTML
     grid_html = ''.join(subdir_items + image_items)
@@ -786,6 +871,47 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         .slideshow-btn:hover {{
             background: rgba(79, 195, 247, 0.3);
+        }}
+        
+        .slideshow-header {{
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }}
+        
+        .slideshow-btn.random-btn {{
+            background: rgba(108, 92, 231, 0.2);
+            border-color: #6c5ce7;
+            color: #a29bfe;
+        }}
+        
+        .slideshow-btn.random-btn:hover {{
+            background: rgba(108, 92, 231, 0.3);
+        }}
+        
+        .slideshow-options {{
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            font-size: 14px;
+            color: var(--text-primary);
+        }}
+        
+        .slideshow-options label {{
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }}
+        
+        .slideshow-options input[type="checkbox"] {{
+            cursor: pointer;
+        }}
+        
+        .full-res-active .slideshow-progress::after {{
+            content: ' [FULL RES]';
+            color: #ffd700;
         }}
         
         .gallery-grid {{
@@ -1241,7 +1367,13 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                     {total_images} image{'s' if total_images != 1 else ''}
                 </div>
             </div>
-            {f'<button class="slideshow-btn" onclick="startSlideshow()">▶ Slideshow ({len(slideshow_images)})</button>' if slideshow_images else ''}
+            <div class="slideshow-header">
+                {f'<button class="slideshow-btn" onclick="startSlideshow(\'sequential\')">▶ Slideshow ({len(sequential_images)})</button>' if sequential_images else ''}
+                {f'<button class="slideshow-btn random-btn" onclick="startSlideshow(\'random\')">🎲 Random ({len(random_pool)})</button>' if random_pool else ''}
+                <div class="slideshow-options">
+                    <label><input type="checkbox" id="fullres-check"> Full Res</label>
+                </div>
+            </div>
         </header>
         
         <div class="gallery-grid">
@@ -1288,7 +1420,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         const prevBtn = document.getElementById('prev-btn');
         const nextBtn = document.getElementById('next-btn');
         
-        // Slideshow controls
+       // Slideshow controls
         const slideshowControls = document.getElementById('slideshow-controls');
         const slideshowProgress = document.getElementById('slideshow-progress');
         const slideshowPlaypause = document.getElementById('slideshow-playpause');
@@ -1299,26 +1431,46 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         let currentIndex = 0;
         
         // Slideshow state
-        let slideshowImageList = [];
+        let sequentialImageList = [];
+        let randomPool = [];
+        let currentMode = null;
         let slideshowIndex = 0;
         let slideshowInterval = null;
         let slideshowPlaying = false;
-        const SLIDESHOW_INTERVAL_MS = 3000;  // 3 seconds
+        const SLIDESHOW_INTERVAL_MS = 3000;
+        
+        // Sequential traversal state (depth-first)
+        let currentDirPath = '';
+        let subdirQueue = [];
+        let currentSubdirs = [];
+        let subdirIndex = 0;
+        
+        // Options
+        let useFullRes = false;
         
         // Build image list for navigation
         const images = document.querySelectorAll('.gallery-item img[data-full]');
         imageList = Array.from(images).map(img => ({{
-            full: img.getAttribute('data-full'),  // LR version if available
-            fullRes: img.getAttribute('data-full-res'),  // Full resolution version
+            full: img.getAttribute('data-full'),
+            fullRes: img.getAttribute('data-full-res'),
             exif: img.getAttribute('data-exif'),
             filename: img.alt || ''
         }}));
         
-        // Slideshow images data (from server)
-        const slideshowImageData = {slideshow_json};
-        if (slideshowImageData) {{
-            slideshowImageList = slideshowImageData;
+        // Sequential slideshow images (current directory only)
+        const sequentialImageData = {sequential_json};
+        if (sequentialImageData) {{
+            sequentialImageList = sequentialImageData;
         }}
+        
+        // Random slideshow pool (recursive from current dir)
+        const randomPoolData = {random_json};
+        if (randomPoolData) {{
+            randomPool = randomPoolData;
+        }}
+        
+        // Subdirectories for depth-first traversal
+        currentSubdirs = {json.dumps(subdirs_list, separators=(',', ':'))} || [];
         
         // Set lightbox orientation based on image dimensions
         function setOrientation(width, height) {{
@@ -1450,12 +1602,77 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         // ========== Slideshow Functions ==========
         
-        function startSlideshow() {{
-            if (slideshowImageList.length === 0) {{
-                alert('No images available for slideshow.');
+        async function fetchDirectoryData(subdirPath) {{
+            try {{
+                const response = await fetch(subdirPath + 'slideshow.json');
+                if (!response.ok) throw new Error('Failed to fetch');
+                const data = await response.json();
+                return data;
+            }} catch (error) {{
+                console.error('Error fetching slideshow data from', subdirPath, error);
+                return null;
+            }}
+        }}
+        
+        async function loadNextDirectory() {{
+            while (subdirIndex < currentSubdirs.length) {{
+                const subdir = currentSubdirs[subdirIndex];
+                subdirIndex++;
+                
+                console.log('Loading subdir:', subdir);
+                const data = await fetchDirectoryData(subdir + '/');
+                
+                if (data && data.images && data.images.length > 0) {{
+                    currentDirPath = subdir + '/';
+                    sequentialImageList = data.images;
+                    slideshowIndex = 0;
+                    
+                    subdirQueue.push({{ dirs: currentSubdirs, index: subdirIndex }});
+                    currentSubdirs = data.subdirs || [];
+                    subdirIndex = 0;
+                    
+                    openSlideshowImage(slideshowIndex);
+                    return true;
+                }}
+            }}
+            
+            if (subdirQueue.length > 0) {{
+                const parentState = subdirQueue.pop();
+                currentSubdirs = parentState.dirs;
+                subdirIndex = parentState.index;
+                currentDirPath = currentDirPath.split('/').slice(0, -2).join('/') + '/';
+                
+                return await loadNextDirectory();
+            }}
+            
+            return false;
+        }}
+        
+        function startSlideshow(mode) {{
+            if (mode === 'sequential') {{
+                if (sequentialImageList.length === 0) {{
+                    alert('No images available for slideshow.');
+                    return;
+                }}
+                currentMode = 'sequential';
+                slideshowIndex = 0;
+                
+                currentDirPath = '';
+                subdirQueue = [];
+                subdirIndex = 1;
+                
+            }} else if (mode === 'random') {{
+                if (randomPool.length === 0) {{
+                    alert('No images available for random slideshow.');
+                    return;
+                }}
+                currentMode = 'random';
+                slideshowIndex = Math.floor(Math.random() * randomPool.length);
+            }} else {{
+                alert('Invalid slideshow mode.');
                 return;
             }}
-            slideshowIndex = 0;
+            
             slideshowPlaying = true;
             lightbox.classList.add('slideshow-active');
             updateSlideshowPlayPauseIcon();
@@ -1471,16 +1688,16 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         }}
         
         function openSlideshowImage(index) {{
-            if (index < 0 || index >= slideshowImageList.length) return;
+            if (index < 0 || index >= (currentMode === 'sequential' ? sequentialImageList.length : randomPool.length)) return;
             
             slideshowIndex = index;
-            const imageData = slideshowImageList[index];
+            const imageData = currentMode === 'sequential' ? sequentialImageList[index] : randomPool[index];
             
             lightbox.classList.remove('active', 'portrait', 'landscape');
             lightbox.classList.add('landscape');
             slideshowControls.style.display = 'flex';
             
-            const newSrc = imageData.full;
+            const newSrc = useFullRes ? imageData.fullRes : imageData.full;
             if (lightboxImg.src === newSrc) {{
                 if (lightboxImg.naturalWidth && lightboxImg.naturalHeight) {{
                     setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
@@ -1503,9 +1720,26 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             lightboxImg.removeAttribute('data-orientation');
         }}
         
-        function slideshowNext() {{
-            slideshowIndex = (slideshowIndex + 1) % slideshowImageList.length;
-            openSlideshowImage(slideshowIndex);
+        async function slideshowNext() {{
+            if (currentMode === 'sequential') {{
+                if (slideshowIndex < sequentialImageList.length - 1) {{
+                    slideshowIndex = slideshowIndex + 1;
+                    openSlideshowImage(slideshowIndex);
+                }} else {{
+                    const loaded = await loadNextDirectory();
+                    if (!loaded) {{
+                        slideshowPlaying = false;
+                        lightbox.classList.remove('slideshow-active');
+                        stopSlideshowTimer();
+                        slideshowControls.style.display = 'none';
+                        alert('End of slideshow');
+                        closeLightbox();
+                    }}
+                }}
+            }} else {{
+                slideshowIndex = Math.floor(Math.random() * randomPool.length);
+                openSlideshowImage(slideshowIndex);
+            }}
             resetSlideshowTimer();
         }}
         
@@ -1524,8 +1758,9 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             slideshowPlaypause.title = slideshowPlaying ? 'Pause' : 'Play';
         }}
         
-        function updateSlideshowProgress() {{
-            slideshowProgress.textContent = `${{slideshowIndex + 1}} / ${{slideshowImageList.length}}`;
+       function updateSlideshowProgress() {{
+            const total = currentMode === 'sequential' ? sequentialImageList.length : randomPool.length;
+            slideshowProgress.textContent = `${{slideshowIndex + 1}} / ${{total}}`;
         }}
         
         function startSlideshowTimer() {{
@@ -1570,11 +1805,12 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             }});
         }});
         
-        // Navigation buttons
+     // Navigation buttons
         prevBtn.addEventListener('click', (e) => {{
             e.stopPropagation();
             if (lightbox.classList.contains('slideshow-active')) {{
-                slideshowIndex = (slideshowIndex - 1 + slideshowImageList.length) % slideshowImageList.length;
+                const total = currentMode === 'sequential' ? sequentialImageList.length : randomPool.length;
+                slideshowIndex = (slideshowIndex - 1 + total) % total;
                 openSlideshowImage(slideshowIndex);
                 resetSlideshowTimer();
             }} else {{
@@ -1630,7 +1866,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             }}
         }});
         
-        // Keyboard navigation
+    // Keyboard navigation
         document.addEventListener('keydown', (e) => {{
             if (!lightbox.classList.contains('active')) return;
             
@@ -1640,7 +1876,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                     break;
                 case 'ArrowLeft':
                     if (lightbox.classList.contains('slideshow-active')) {{
-                        slideshowIndex = (slideshowIndex - 1 + slideshowImageList.length) % slideshowImageList.length;
+                        const total = currentMode === 'sequential' ? sequentialImageList.length : randomPool.length;
+                        slideshowIndex = (slideshowIndex - 1 + total) % total;
                         openSlideshowImage(slideshowIndex);
                         resetSlideshowTimer();
                     }} else {{
@@ -1662,6 +1899,14 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                     break;
             }}
         }});
+        
+        // Full-res toggle
+        document.getElementById('fullres-check').addEventListener('change', function(e) {{
+            useFullRes = e.target.checked;
+            if (lightbox.classList.contains('slideshow-active')) {{
+                openSlideshowImage(slideshowIndex);
+            }}
+        }});
     </script>
 </body>
 </html>'''
@@ -1677,8 +1922,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         return False
 
 
-def process_directory(directory, output_dir, root_path, thumb_size, force):
-    """Process a single directory and generate its index.html."""
+def process_directory(directory, output_dir, root_path, thumb_size, force, random_depth=None):
+    """Process a single directory and generate its index.html and slideshow.json."""
     images = get_image_files(directory)
     subdirs = get_subdirectories(directory)
     
@@ -1688,9 +1933,13 @@ def process_directory(directory, output_dir, root_path, thumb_size, force):
     
     print(f"  Processing: {os.path.relpath(directory, root_path) or 'root'}")
     
-    if generate_html(directory, output_dir, root_path, thumb_size, force):
-        return 1
-    return 0
+    success = 0
+    if generate_html(directory, output_dir, root_path, thumb_size, force=force, random_depth=random_depth):
+        success += 1
+    if generate_slideshow_json(directory, output_dir):
+        success += 1
+    
+    return success
 
 
 def calculate_metrics(root_path, output_root):
@@ -1759,6 +2008,22 @@ def calculate_metrics(root_path, output_root):
     metrics['lr_count'] = lr_count
     metrics['lr_size'] = lr_size
     
+    # Total size of slideshow.json files
+    json_count = 0
+    json_size = 0
+    for dirpath, _, filenames in os.walk(output_root):
+        if any(d in EXCLUDED_DIRS for d in dirpath.split(os.sep)):
+            continue
+        for f in filenames:
+            if f == 'slideshow.json':
+                try:
+                    json_size += os.path.getsize(os.path.join(dirpath, f))
+                    json_count += 1
+                except OSError:
+                    pass
+    metrics['json_count'] = json_count
+    metrics['json_size'] = json_size
+    
     return metrics
 
 
@@ -1771,8 +2036,9 @@ def print_metrics(metrics):
     print(f"Thumbnails:        {metrics['thumb_count']:6,} files  ({format_size(metrics['thumb_size'])})")
     print(f"LR Images:         {metrics['lr_count']:6,} files  ({format_size(metrics['lr_size'])})")
     print(f"Index HTML Files:  {metrics['html_count']:6,} files  ({format_size(metrics['html_size'])})")
+    print(f"Slideshow JSON:    {metrics.get('json_count', 0):6,} files  ({format_size(metrics.get('json_size', 0))})")
     print("-" * 50)
-    total_generated = metrics['thumb_size'] + metrics['lr_size'] + metrics['html_size']
+    total_generated = metrics['thumb_size'] + metrics['lr_size'] + metrics['html_size'] + metrics.get('json_size', 0)
     print(f"Total Generated:   {format_size(total_generated)}")
     if metrics['photo_size'] > 0:
         ratio = (total_generated / metrics['photo_size']) * 100
@@ -1780,7 +2046,7 @@ def print_metrics(metrics):
     print("=" * 50)
 
 
-def walk_and_generate(root_path, output_root, thumb_size, force):
+def walk_and_generate(root_path, output_root, thumb_size, force, random_depth=None):
     """Recursively walk directory tree and generate galleries."""
     total_pages = 0
     
@@ -1812,7 +2078,7 @@ def walk_and_generate(root_path, output_root, thumb_size, force):
         # Ensure output directory exists
         os.makedirs(output_dir, exist_ok=True)
         
-        pages = process_directory(dir_path, output_dir, root_path, thumb_size, force)
+        pages = process_directory(dir_path, output_dir, root_path, thumb_size, force, random_depth)
         total_pages += pages
     
     print("-" * 50)
@@ -1872,7 +2138,7 @@ def main():
         print()
     
     # Walk directory tree and generate galleries
-    result = walk_and_generate(root_path, output_root, args.thumb_size, args.force)
+    result = walk_and_generate(root_path, output_root, args.thumb_size, args.force, args.random_depth)
     
     if isinstance(result, tuple):
         total_pages, metrics = result
