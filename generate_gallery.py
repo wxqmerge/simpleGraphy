@@ -2189,6 +2189,28 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             lightboxFilename.textContent = imageData.filename || '';
             lightboxExif.innerHTML = '';
             lightboxImg.removeAttribute('data-orientation');
+            
+            // Set up click handler for full-res if available (same as openLightbox)
+            const hasFullRes = imageData.fullRes && imageData.fullRes !== imageData.full;
+            if (hasFullRes) {{
+                lightboxImg.style.cursor = 'pointer';
+                lightboxFilename.innerHTML = `${{imageData.filename || ''}} <span class="full-res-hint">(click image for full res)</span>`;
+                lightboxImg.onclick = function(e) {{
+                    e.stopPropagation();
+                    const a = document.createElement('a');
+                    a.href = imageData.fullRes;
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                    a.style.display = 'none';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                }};
+            }} else {{
+                lightboxImg.style.cursor = 'default';
+                lightboxImg.onclick = null;
+                lightboxFilename.textContent = imageData.filename || '';
+            }}
         }}
         
         async function slideshowNext() {{
