@@ -250,13 +250,25 @@ def get_subdirectory_list(directory):
 
 
 def collect_dirs_with_images(root_path):
-    """Collect all directories with images in DFS order."""
+    """Collect all subdirectories with images or children in DFS order (excludes root)."""
     result = []
     
     def scan(path):
-        images = get_image_files(path)
-        if images:
-            result.append(path)
+        # Don't add the root directory itself
+        if path != root_path:
+            has_direct = bool(get_image_files(path))
+            has_children = False
+            try:
+                for d in os.listdir(path):
+                    if d not in EXCLUDED_DIRS:
+                        full_path = os.path.join(path, d)
+                        if os.path.isdir(full_path):
+                            has_children = True
+                            break
+            except (PermissionError, OSError):
+                pass
+            if has_direct or has_children:
+                result.append(path)
         try:
             dirs = sorted(os.listdir(path))
             for d in dirs:
@@ -272,52 +284,53 @@ def collect_dirs_with_images(root_path):
 
 
 def get_sibling_nav(current_dir, all_dirs_with_images, root_path):
-    """Get relative paths to previous and next sibling directories at same parent level."""
-    rel = os.path.relpath(current_dir, root_path).replace(os.sep, '/')
+    """Get prev/next paths - sibling only navigation at all levels.
     
-    if rel == '.':
+    Navigation rules:
+      prev = previous sibling directory, or parent if no previous sibling
+      next = next sibling directory, or parent if no next sibling
+    """
+    current_abs = os.path.abspath(current_dir)
+    root_abs = os.path.abspath(root_path)
+    
+    def get_siblings(dir_abs):
+        """Get all sibling directories (sorted by name)."""
+        parent = os.path.dirname(dir_abs)
+        try:
+            entries = sorted(os.listdir(parent), key=lambda x: x.lower())
+        except (PermissionError, OSError):
+            return []
+        result = []
+        for e in entries:
+            if e in EXCLUDED_DIRS:
+                continue
+            full = os.path.join(parent, e)
+            if os.path.isdir(full):
+                result.append(full)
+        return result
+    
+    siblings = get_siblings(current_abs)
+    
+    # Find current index in siblings
+    try:
+        idx = [os.path.abspath(s) for s in siblings].index(current_abs)
+    except ValueError:
         return '', ''
     
-    parts = rel.split('/')
-    parent_rel = '/'.join(parts[:-1]) if len(parts) > 1 else '.'
-    
-    # Find all directories under this parent that have images
-    siblings = []
-    for d in all_dirs_with_images:
-        d_rel = os.path.relpath(d, root_path).replace(os.sep, '/')
-        d_parts = d_rel.split('/')
-        d_parent = '/'.join(d_parts[:-1]) if len(d_parts) > 1 else '.'
-        if d_parent == parent_rel:
-            siblings.append(d)
-    
-    if len(siblings) <= 1:
-        return '', ''
-    
-    # Sort by directory name (case-insensitive)
-    siblings.sort(key=lambda p: os.path.basename(p).lower())
-    
-    # Find current index
-    current_index = -1
-    for i, sib in enumerate(siblings):
-        if os.path.abspath(sib) == os.path.abspath(current_dir):
-            current_index = i
-            break
-    
-    if current_index < 0:
-        return '', ''
-    
-    # Build relative paths from current page (go up to parent, then into sibling)
-    up = '../' * (len(parts) - 1)
-    
-    prev_path = ''
-    if current_index > 0:
-        prev_name = os.path.basename(siblings[current_index - 1])
-        prev_path = up + prev_name + '/'
-    
+    # Next sibling
     next_path = ''
-    if current_index < len(siblings) - 1:
-        next_name = os.path.basename(siblings[current_index + 1])
-        next_path = up + next_name + '/'
+    if idx + 1 < len(siblings):
+        next_path = os.path.relpath(siblings[idx + 1], current_dir).replace(os.sep, '/') + '/'
+    
+    # Prev sibling - find previous sibling, or go to parent if none
+    prev_path = ''
+    if idx > 0:
+        prev_path = os.path.relpath(siblings[idx - 1], current_dir).replace(os.sep, '/') + '/'
+    else:
+        # No previous sibling at this level - parent is the prev
+        parent = os.path.dirname(current_abs)
+        if parent and parent != root_abs:
+            prev_path = os.path.relpath(parent, current_dir).replace(os.sep, '/') + '/'
     
     return prev_path, next_path
 
@@ -690,19 +703,19 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     dir_name_safe = html.escape(dir_name)
     
     # Build breadcrumb navigation
-    rel_path = os.path.relpath(directory, root_path)
+    rel_path = os.path.relpath(directory, root_path).replace('\\', '/')
     if rel_path == '.':
         breadcrumbs = [{'name': 'Root', 'link': './'}]
     else:
-        breadcrumbs = [{'name': 'Root', 'link': '../' * (rel_path.count(os.sep) + 1)}]
-        parts = rel_path.split(os.sep)
-        path_so_far = ''
+        parts = [p for p in rel_path.split('/') if p]
+        current_depth = len(parts)
+        # Root goes to parent of root_path
+        breadcrumbs = [{'name': 'Root', 'link': '../' * current_depth}]
         for i, part in enumerate(parts):
-            path_so_far = os.path.join(path_so_far, part) if path_so_far else part
-            link_depth = len(parts) - i
+            # Each intermediate link: go up to ancestor depth, landing exactly at it
             breadcrumbs.append({
                 'name': html.escape(part),
-                'link': '../' * link_depth + (path_so_far.replace(os.sep, '/') + '/' if i < len(parts) - 1 else '')
+                'link': '../' * (current_depth - i - 1)
             })
     
     breadcrumb_html = ''
@@ -944,32 +957,32 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         const browsePrevPath = ''' + json.dumps(browse_prev) + ''';
         const browseNextPath = ''' + json.dumps(browse_next) + ''';
         
-        document.addEventListener('DOMContentLoaded', function() {{
+        document.addEventListener('DOMContentLoaded', function() {
             const prevBtn = document.getElementById('browse-dir-prev');
             const nextBtn = document.getElementById('browse-dir-next');
             
-            if (prevBtn) {{
-                if (!browsePrevPath) {{
+            if (prevBtn) {
+                if (!browsePrevPath) {
                     prevBtn.classList.add('disabled');
-                }} else {{
-                    prevBtn.addEventListener('click', function(e) {{
+                } else {
+                    prevBtn.addEventListener('click', function(e) {
                         e.preventDefault();
                         window.location.href = browsePrevPath;
-                    }});
-                }}
-            }}
+                    });
+                }
+            }
             
-            if (nextBtn) {{
-                if (!browseNextPath) {{
+            if (nextBtn) {
+                if (!browseNextPath) {
                     nextBtn.classList.add('disabled');
-                }} else {{
-                    nextBtn.addEventListener('click', function(e) {{
+                } else {
+                    nextBtn.addEventListener('click', function(e) {
                         e.preventDefault();
                         window.location.href = browseNextPath;
-                    }});
-                }}
-            }}
-        }});'''
+                    });
+                }
+            }
+        });'''
     
     # Generate complete HTML
     html_content = f'''<!DOCTYPE html>
@@ -2158,23 +2171,22 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             slideshowIndex = index;
             const imageData = currentMode === 'sequential' ? sequentialImageList[index] : randomPool[index];
             
-            lightbox.classList.remove('active', 'portrait', 'landscape');
+            lightbox.classList.add('active', 'slideshow-active');
+            lightbox.classList.remove('portrait');
             lightbox.classList.add('landscape');
             slideshowControls.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
             
+            // Update orientation without removing active class to prevent flicker
             const newSrc = useFullRes ? imageData.fullRes : imageData.full;
             if (lightboxImg.src === newSrc) {{
                 if (lightboxImg.naturalWidth && lightboxImg.naturalHeight) {{
                     setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
-                    lightbox.classList.add('active');
-                    document.body.style.overflow = 'hidden';
                     updateSlideshowProgress();
                 }}
             }} else {{
                 lightboxImg.onload = function() {{
                     setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
-                    lightbox.classList.add('active');
-                    document.body.style.overflow = 'hidden';
                     updateSlideshowProgress();
                 }};
                 lightboxImg.src = newSrc;
