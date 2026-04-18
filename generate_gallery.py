@@ -5,12 +5,17 @@ Gallery Generator - Creates responsive photo galleries with thumbnails and light
 Usage:
     python generate_gallery.py galleries/
     python generate_gallery.py galleries/ --thumb-size 400 --force
+    python generate_gallery.py galleries/ --slideshow
+    python generate_gallery.py galleries/ --random --random-depth 2
 
 Arguments:
     --root, -r          Root directory to scan (default: galleries)
     --output-root, -o   Where to write index.html files (default: same as --root)
     --thumb-size, -t    Max thumbnail dimension in pixels (default: 400)
     --force, -f         Force rebuild all thumbnails even if they exist
+    --slideshow         Enable sequential slideshow (embeds current-dir images)
+    --random            Enable random slideshow (embeds recursive image pool)
+    --random-depth      Max recursion depth for random pool (default: unlimited)
 """
 
 import argparse
@@ -113,11 +118,13 @@ Examples:
   python generate_gallery.py galleries/
   python generate_gallery.py galleries/ --thumb-size 250
   python generate_gallery.py galleries/ --output-root public/galleries/ --force
+  python generate_gallery.py galleries/ --slideshow
+  python generate_gallery.py galleries/ --random --random-depth 2
 
 Output Structure:
    Each directory with images gets an index.html and .thumbs/ subdirectory.
    Thumbnails are 400px max dimension JPG files (HEIF converted automatically).
-        """
+         """
     )
     
     parser.add_argument(
@@ -147,10 +154,22 @@ Output Structure:
     )
     
     parser.add_argument(
+        '--slideshow',
+        action='store_true',
+        help='Enable sequential slideshow (embeds current directory images)'
+    )
+    
+    parser.add_argument(
+        '--random',
+        action='store_true',
+        help='Enable random slideshow (embeds recursive image pool)'
+    )
+    
+    parser.add_argument(
         '--random-depth', '-d',
         type=int,
         default=None,
-        help='Max recursion depth for random slideshow pool (default: unlimited)'
+        help='Max recursion depth for random pool (default: unlimited)'
     )
     
     return parser.parse_args()
@@ -585,7 +604,7 @@ def generate_thumbnail(source_path, thumb_path, thumb_size):
         return False
 
 
-def generate_html(directory, output_dir, root_path, thumb_size, force=False, parent_path=None, random_depth=None):
+def generate_html(directory, output_dir, root_path, thumb_size, force=False, parent_path=None, random_depth=None, enable_slideshow=False, enable_random=False):
     """Generate index.html for a directory."""
     images = get_image_files(directory)
     subdirs = get_subdirectories(directory)
@@ -771,15 +790,22 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     total_folders = len(subdir_items)
     
     # Sequential slideshow: only current directory (non-recursive)
-    sequential_images = get_slideshow_images(directory, output_dir)
-    sequential_json = json.dumps(sequential_images, separators=(',', ':'))
+    if enable_slideshow:
+        sequential_images = get_slideshow_images(directory, output_dir)
+        sequential_json = json.dumps(sequential_images, separators=(',', ':'))
+        subdirs_list = get_subdirectory_list(directory)
+    else:
+        sequential_images = []
+        sequential_json = '[]'
+        subdirs_list = []
     
     # Random slideshow pool: recursive from this directory
-    random_pool = get_random_pool(directory, output_dir, max_depth=random_depth)
-    random_json = json.dumps(random_pool, separators=(',', ':'))
-    
-    # Subdirectories for depth-first traversal
-    subdirs_list = get_subdirectory_list(directory)
+    if enable_random:
+        random_pool = get_random_pool(directory, output_dir, max_depth=random_depth)
+        random_json = json.dumps(random_pool, separators=(',', ':'))
+    else:
+        random_pool = []
+        random_json = '[]'
     
     # Build gallery grid HTML
     grid_html = ''.join(subdir_items + image_items)
@@ -1367,13 +1393,13 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                     {total_images} image{'s' if total_images != 1 else ''}
                 </div>
             </div>
-            <div class="slideshow-header">
+            {f'''<div class="slideshow-header">
                 {f'<button class="slideshow-btn" onclick="startSlideshow(\'sequential\')">▶ Slideshow ({len(sequential_images)})</button>' if sequential_images else ''}
                 {f'<button class="slideshow-btn random-btn" onclick="startSlideshow(\'random\')">🎲 Random ({len(random_pool)})</button>' if random_pool else ''}
                 <div class="slideshow-options">
                     <label><input type="checkbox" id="fullres-check"> Full Res</label>
                 </div>
-            </div>
+            </div>''' if enable_slideshow or enable_random else ''}
         </header>
         
         <div class="gallery-grid">
@@ -1457,20 +1483,20 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             filename: img.alt || ''
         }}));
         
-        // Sequential slideshow images (current directory only)
+     {f'''// Sequential slideshow images (current directory only)
         const sequentialImageData = {sequential_json};
         if (sequentialImageData) {{
             sequentialImageList = sequentialImageData;
         }}
+
+        // Subdirectories for depth-first traversal
+        currentSubdirs = {json.dumps(subdirs_list, separators=(',', ':'))} || [];''' if enable_slideshow else ''}
         
-        // Random slideshow pool (recursive from current dir)
+        {f'''// Random slideshow pool (recursive from current dir)
         const randomPoolData = {random_json};
         if (randomPoolData) {{
             randomPool = randomPoolData;
-        }}
-        
-        // Subdirectories for depth-first traversal
-        currentSubdirs = {json.dumps(subdirs_list, separators=(',', ':'))} || [];
+        }}''' if enable_random else ''}
         
         // Set lightbox orientation based on image dimensions
         function setOrientation(width, height) {{
@@ -1922,7 +1948,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         return False
 
 
-def process_directory(directory, output_dir, root_path, thumb_size, force, random_depth=None):
+def process_directory(directory, output_dir, root_path, thumb_size, force, random_depth=None, enable_slideshow=False, enable_random=False):
     """Process a single directory and generate its index.html and slideshow.json."""
     images = get_image_files(directory)
     subdirs = get_subdirectories(directory)
@@ -1934,7 +1960,7 @@ def process_directory(directory, output_dir, root_path, thumb_size, force, rando
     print(f"  Processing: {os.path.relpath(directory, root_path) or 'root'}")
     
     success = 0
-    if generate_html(directory, output_dir, root_path, thumb_size, force=force, random_depth=random_depth):
+    if generate_html(directory, output_dir, root_path, thumb_size, force=force, random_depth=random_depth, enable_slideshow=enable_slideshow, enable_random=enable_random):
         success += 1
     if generate_slideshow_json(directory, output_dir):
         success += 1
@@ -2046,7 +2072,7 @@ def print_metrics(metrics):
     print("=" * 50)
 
 
-def walk_and_generate(root_path, output_root, thumb_size, force, random_depth=None):
+def walk_and_generate(root_path, output_root, thumb_size, force, random_depth=None, enable_slideshow=False, enable_random=False):
     """Recursively walk directory tree and generate galleries."""
     total_pages = 0
     
@@ -2078,7 +2104,7 @@ def walk_and_generate(root_path, output_root, thumb_size, force, random_depth=No
         # Ensure output directory exists
         os.makedirs(output_dir, exist_ok=True)
         
-        pages = process_directory(dir_path, output_dir, root_path, thumb_size, force, random_depth)
+        pages = process_directory(dir_path, output_dir, root_path, thumb_size, force, random_depth, enable_slideshow, enable_random)
         total_pages += pages
     
     print("-" * 50)
@@ -2138,7 +2164,7 @@ def main():
         print()
     
     # Walk directory tree and generate galleries
-    result = walk_and_generate(root_path, output_root, args.thumb_size, args.force, args.random_depth)
+    result = walk_and_generate(root_path, output_root, args.thumb_size, args.force, args.random_depth, args.slideshow, args.random)
     
     if isinstance(result, tuple):
         total_pages, metrics = result
