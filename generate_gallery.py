@@ -1352,6 +1352,44 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         .slideshow-playpause:hover {{
             color: #fff;
         }}
+
+        .slideshow-dir-nav {{
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }}
+
+        .slideshow-dir-name {{
+            color: #bbb;
+            font-size: 0.85em;
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 60px;
+        }}
+
+        .slideshow-dir-btn {{
+            background: none;
+            border: none;
+            color: #4fc3f7;
+            font-size: 1.2em;
+            cursor: pointer;
+            padding: 0 2px;
+            line-height: 1;
+            opacity: 0.6;
+            transition: opacity 0.2s, color 0.2s;
+        }}
+
+        .slideshow-dir-btn:hover {{
+            opacity: 1;
+            color: #fff;
+        }}
+
+        .slideshow-dir-btn.disabled {{
+            visibility: hidden;
+            pointer-events: none;
+        }}
         
         /* Timer progress bar */
         .slideshow-timer-bar {{
@@ -1464,6 +1502,11 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         <!-- Slideshow controls -->
         <div class="slideshow-controls" id="slideshow-controls">
             <span class="slideshow-progress" id="slideshow-progress">1 / 10</span>
+            <div class="slideshow-dir-nav">
+                <button class="slideshow-dir-btn" id="dir-prev-btn" title="Previous Directory">&#8592;</button>
+                <span class="slideshow-dir-name" id="slideshow-dir-name"></span>
+                <button class="slideshow-dir-btn" id="dir-next-btn" title="Next Directory">&#8594;</button>
+            </div>
             <button class="slideshow-playpause" id="slideshow-playpause" title="Pause">⏸</button>
         </div>
         <div class="slideshow-timer-bar" id="slideshow-timer-bar"></div>
@@ -1499,6 +1542,9 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         const slideshowProgress = document.getElementById('slideshow-progress');
         const slideshowPlaypause = document.getElementById('slideshow-playpause');
         const slideshowTimerBar = document.getElementById('slideshow-timer-bar');
+        const dirPrevBtn = document.getElementById('dir-prev-btn');
+        const dirNextBtn = document.getElementById('dir-next-btn');
+        const slideshowDirName = document.getElementById('slideshow-dir-name');
         
         // Image navigation state
         let imageList = [];
@@ -1519,6 +1565,10 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         let currentSubdirs = [];
         let subdirIndex = 0;
         const subdirCache = new Map();
+
+        // Directory navigation (sequential mode)
+        let dirNavList = [];
+        let currentDirIndex = -1;
         
         // Options
         let useFullRes = false;
@@ -1749,6 +1799,26 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                     }}
                 }}
                 
+                // Build directory navigation list
+                const usingRecursivePool = sequentialImageList === window._sequentialRecursivePool;
+                buildDirNavList();
+                
+                // If using recursive pool fallback, ensure root dir is in the nav list
+                if (usingRecursivePool && currentDirPath === '' && dirNavList.length > 0) {{
+                    // Check if root dir already exists
+                    let rootExists = false;
+                    for (let i = 0; i < dirNavList.length; i++) {{
+                        if (dirNavList[i].path === '') {{
+                            rootExists = true;
+                            break;
+                        }}
+                    }}
+                    if (!rootExists) {{
+                        dirNavList.unshift({{ path: '', name: '.', imageCount: window._sequentialRecursivePool.length }});
+                        currentDirIndex = 0;
+                    }}
+                }}
+                
             }} else if (mode === 'random') {{
                 if (randomPool.length === 0) {{
                     alert('No images available for random slideshow.');
@@ -1766,6 +1836,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             updateSlideshowPlayPauseIcon();
             openSlideshowImage(slideshowIndex);
             startSlideshowTimer();
+            updateDirNavDisplay();
         }}
         
         function stopSlideshow() {{
@@ -1773,6 +1844,168 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             lightbox.classList.remove('slideshow-active');
             stopSlideshowTimer();
             slideshowControls.style.display = 'none';
+        }}
+        
+        async function buildDirNavList() {{
+            dirNavList = [];
+            currentDirIndex = -1;
+            
+            // Scan all directories depth-first to find those with images
+            const scannedDirs = new Map();
+            
+            async function scanDir(dirPath, parentScanned) {{
+                // Check cache first
+                let data = subdirCache.get(dirPath);
+                if (!data) {{
+                    try {{
+                        const resp = await fetch(dirPath + 'slideshow.json');
+                        if (resp.ok) {{
+                            data = await resp.json();
+                            subdirCache.set(dirPath, data);
+                        }} else {{
+                            return;
+                        }}
+                    }} catch (e) {{
+                        return;
+                    }}
+                }}
+                
+                const hasImages = data && data.images && data.images.length > 0;
+                const subdirs = data.subdirs || [];
+                
+                if (hasImages) {{
+                    dirNavList.push({{ path: dirPath, name: dirPath.split('/').pop() || '.', imageCount: data.images.length }});
+                }}
+                
+                for (const subdir of subdirs) {{
+                    const subdirPath = dirPath + subdir + '/';
+                    if (!scannedDirs.has(subdirPath)) {{
+                        scannedDirs.set(subdirPath, true);
+                        await scanDir(subdirPath, scannedDirs);
+                    }}
+                }}
+            }}
+            
+            // Start scanning from root
+            await scanDir('', new Map());
+            
+            // Find current directory index
+            if (currentDirPath && dirNavList.length > 0) {{
+                for (let i = 0; i < dirNavList.length; i++) {{
+                    if (dirNavList[i].path === currentDirPath) {{
+                        currentDirIndex = i;
+                        break;
+                    }}
+                }}
+            }}
+            
+            updateDirNavDisplay();
+        }}
+        
+        function updateDirNavDisplay() {{
+            if (currentMode !== 'sequential') {{
+                slideshowDirName.textContent = '';
+                dirPrevBtn.style.display = 'none';
+                dirNextBtn.style.display = 'none';
+                return;
+            }}
+            
+            dirPrevBtn.style.display = '';
+            dirNextBtn.style.display = '';
+            
+            if (dirNavList.length === 0) {{
+                slideshowDirName.textContent = '';
+                dirPrevBtn.classList.add('disabled');
+                dirNextBtn.classList.add('disabled');
+                return;
+            }}
+            
+            if (currentDirIndex >= 0 && currentDirIndex < dirNavList.length) {{
+                slideshowDirName.textContent = dirNavList[currentDirIndex].name || '.';
+            }} else {{
+                slideshowDirName.textContent = '';
+            }}
+            
+            dirPrevBtn.classList.toggle('disabled', currentDirIndex <= 0);
+            dirNextBtn.classList.toggle('disabled', currentDirIndex >= dirNavList.length - 1);
+        }}
+        
+        async function dirNavPrev() {{
+            if (currentDirIndex <= 0 || dirNavList.length === 0) return;
+            
+            const targetIndex = currentDirIndex - 1;
+            const targetDir = dirNavList[targetIndex];
+            currentDirIndex = targetIndex;
+            updateDirNavDisplay();
+            
+            // Navigate to the target directory
+            currentDirPath = targetDir.path;
+            subdirQueue = [];
+            subdirIndex = 0;
+            
+            try {{
+                const resp = await fetch(targetDir.path + 'slideshow.json');
+                if (resp.ok) {{
+                    const data = await resp.json();
+                    if (data.images && data.images.length > 0) {{
+                        sequentialImageList = data.images;
+                        slideshowIndex = data.images.length - 1;
+                        currentSubdirs = data.subdirs || [];
+                        openSlideshowImage(slideshowIndex);
+                        resetSlideshowTimer();
+                        return;
+                    }}
+                }}
+            }} catch (e) {{
+                console.error('Failed to load directory:', targetDir.path, e);
+            }}
+            
+            // Fallback: use recursive pool for this directory
+            if (window._sequentialRecursivePool && window._sequentialRecursivePool.length > 0) {{
+                sequentialImageList = window._sequentialRecursivePool;
+                slideshowIndex = 0;
+                openSlideshowImage(slideshowIndex);
+                resetSlideshowTimer();
+            }}
+        }}
+        
+        async function dirNavNext() {{
+            if (currentDirIndex >= dirNavList.length - 1 || dirNavList.length === 0) return;
+            
+            const targetIndex = currentDirIndex + 1;
+            const targetDir = dirNavList[targetIndex];
+            currentDirIndex = targetIndex;
+            updateDirNavDisplay();
+            
+            // Navigate to the target directory
+            currentDirPath = targetDir.path;
+            subdirQueue = [];
+            subdirIndex = 0;
+            
+            try {{
+                const resp = await fetch(targetDir.path + 'slideshow.json');
+                if (resp.ok) {{
+                    const data = await resp.json();
+                    if (data.images && data.images.length > 0) {{
+                        sequentialImageList = data.images;
+                        slideshowIndex = 0;
+                        currentSubdirs = data.subdirs || [];
+                        openSlideshowImage(slideshowIndex);
+                        resetSlideshowTimer();
+                        return;
+                    }}
+                }}
+            }} catch (e) {{
+                console.error('Failed to load directory:', targetDir.path, e);
+            }}
+            
+            // Fallback: use recursive pool for this directory
+            if (window._sequentialRecursivePool && window._sequentialRecursivePool.length > 0) {{
+                sequentialImageList = window._sequentialRecursivePool;
+                slideshowIndex = 0;
+                openSlideshowImage(slideshowIndex);
+                resetSlideshowTimer();
+            }}
         }}
         
         function openSlideshowImage(index) {{
@@ -1915,10 +2148,25 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             }}
         }});
         
-        // Slideshow play/pause button
+       // Slideshow play/pause button
         slideshowPlaypause.addEventListener('click', (e) => {{
             e.stopPropagation();
             toggleSlideshowPlayPause();
+        }});
+        
+        // Directory navigation buttons (sequential mode only)
+        dirPrevBtn.addEventListener('click', (e) => {{
+            e.stopPropagation();
+            if (currentMode === 'sequential') {{
+                dirNavPrev();
+            }}
+        }});
+        
+        dirNextBtn.addEventListener('click', (e) => {{
+            e.stopPropagation();
+            if (currentMode === 'sequential') {{
+                dirNavNext();
+            }}
         }});
         
         // Close lightbox
