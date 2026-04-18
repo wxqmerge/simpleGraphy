@@ -822,13 +822,21 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     # Build gallery grid HTML
     grid_html = ''.join(subdir_items + image_items)
     
-    # Pre-compute slideshow buttons to avoid nested f-string quoting issues
+    # Pre-compute slideshow elements to avoid nested f-string issues (Python 3.10)
     slideshow_header_html = ''
+    slideshow_header_block = ''
     if enable_slideshow and (sequential_images or sequential_recursive_pool):
         seq_count = len(sequential_images) if sequential_images else len(sequential_recursive_pool)
-        slideshow_header_html += f'<button class="slideshow-btn" onclick="startSlideshow(\'sequential\')">▶ Slideshow ({seq_count})</button>'
+        slideshow_header_html += '<button class="slideshow-btn" onclick="startSlideshow(\'sequential\')">▶ Slideshow (' + str(seq_count) + ')</button>'
     if random_pool:
-        slideshow_header_html += f'<button class="slideshow-btn random-btn" onclick="startSlideshow(\'random\')">🎲 Random ({len(random_pool)})</button>'
+        slideshow_header_html += '<button class="slideshow-btn random-btn" onclick="startSlideshow(\'random\')">🎲 Random (' + str(len(random_pool)) + ')</button>'
+    if slideshow_header_html:
+        slideshow_header_block = '''        <div class="slideshow-header">
+                ''' + slideshow_header_html + '''
+                <div class="slideshow-options">
+                    <label><input type="checkbox" id="fullres-check"> Full Res</label>
+                </div>
+            </div>'''
     
     # Generate complete HTML
     html_content = f'''<!DOCTYPE html>
@@ -1413,12 +1421,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                     {total_images} image{'s' if total_images != 1 else ''}
                 </div>
             </div>
-            {f'''         <div class="slideshow-header">
-                {slideshow_header_html}
-                <div class="slideshow-options">
-                    <label><input type="checkbox" id="fullres-check"> Full Res</label>
-                </div>
-            </div>''' if enable_slideshow or enable_random else ''}
+            {slideshow_header_block}
         </header>
         
         <div class="gallery-grid">
