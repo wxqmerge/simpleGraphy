@@ -105,7 +105,7 @@ Examples:
     parser.add_argument(
         '--all',
         action='store_true',
-        help='Remove ALL generated files (index.html, .thumbs/, .lr/, slideshow.json)'
+        help='Remove ALL generated files (index.html, .thumbs/, .lr/)'
     )
     
     args = parser.parse_args()
@@ -268,20 +268,8 @@ def cleanup_all(root_path, dry_run=False):
                     html_file.unlink()
                 deleted_files.append((html_file, size))
                 total_freed += size
-            except OSError as e:
-                print(f"  [ERROR] Failed to delete {html_file}: {e}")
-        
-        # Remove slideshow.json files
-        if 'slideshow.json' in filenames:
-            json_file = current_path / 'slideshow.json'
-            try:
-                size = os.path.getsize(json_file)
-                if not dry_run:
-                    json_file.unlink()
-                deleted_files.append((json_file, size))
-                total_freed += size
-            except OSError as e:
-                print(f"  [ERROR] Failed to delete {json_file}: {e}")
+          except OSError as e:
+                    print(f"  [ERROR] Failed to delete {html_file}: {e}")
         
         # Remove .thumbs directories
         thumbs_dir = current_path / '.thumbs'
