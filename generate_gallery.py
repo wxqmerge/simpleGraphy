@@ -875,15 +875,21 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     total_images = len(images)
     total_folders = len(subdir_items)
     
-    # Sequential slideshow: only current directory (non-recursive)
+    # Sequential slideshow: recursive pool (all images in order)
     if enable_slideshow:
         sequential_images = get_slideshow_images(directory, output_dir)
-        sequential_json = json.dumps(sequential_images, separators=(',', ':'))
         subdirs_list = get_subdirectory_list(directory)
+        # Use recursive pool for full traversal (same as random but sequential)
+        sequential_recursive_pool = get_random_pool(directory, output_dir, max_depth=random_depth) if enable_random else get_random_pool(directory, output_dir)
+        sequential_recursive_json = json.dumps(sequential_recursive_pool, separators=(',', ':'))
+        # Also embed current dir images for immediate display
+        sequential_json = json.dumps(sequential_images, separators=(',', ':'))
     else:
         sequential_images = []
         sequential_json = '[]'
         subdirs_list = []
+        sequential_recursive_pool = []
+        sequential_recursive_json = '[]'
     
     # Random slideshow pool: recursive from this directory
     if enable_random:
@@ -893,18 +899,6 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         random_pool = []
         random_json = '[]'
     
-    # Sequential fallback: embedded recursive pool when no direct images
-    if enable_slideshow and not sequential_images:
-        shared_recursive = random_pool if enable_random else get_random_pool(directory, output_dir, max_depth=random_depth)
-        sequential_recursive_pool = shared_recursive
-        sequential_recursive_json = json.dumps(shared_recursive, separators=(',', ':'))
-    elif enable_slideshow:
-        sequential_recursive_pool = []
-        sequential_recursive_json = '[]'
-    else:
-        sequential_recursive_pool = []
-        sequential_recursive_json = '[]'
-    
     # Build gallery grid HTML
     grid_html = ''.join(subdir_items + image_items)
     
@@ -912,7 +906,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     slideshow_header_html = ''
     slideshow_header_block = ''
     if enable_slideshow and (sequential_images or sequential_recursive_pool):
-        seq_count = len(sequential_images) if sequential_images else len(sequential_recursive_pool)
+        seq_count = len(sequential_recursive_pool) if sequential_recursive_pool else len(sequential_images)
         slideshow_header_html += '<button class="slideshow-btn" onclick="startSlideshow(\'sequential\')">▶ Slideshow (' + str(seq_count) + ')</button>'
     if random_pool:
         slideshow_header_html += '<button class="slideshow-btn random-btn" onclick="startSlideshow(\'random\')">🎲 Random (' + str(len(random_pool)) + ')</button>'
@@ -927,18 +921,15 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     # Pre-compute JS blocks to avoid nested f-string issues (Python 3.10)
     sequential_js_block = ''
     if enable_slideshow:
-        sequential_js_block = '''// Sequential slideshow images (current directory only)
-        let sequentialImageData = ''' + sequential_json + ''';
-        if (sequentialImageData) {
-            sequentialImageList = sequentialImageData;
-        }
-
-        // Recursive pool as fallback when no direct images
+        sequential_js_block = '''// Sequential slideshow pool (all images for full traversal)
         const sequentialRecursivePoolData = ''' + sequential_recursive_json + ''';
         if (sequentialRecursivePoolData && sequentialRecursivePoolData.length > 0) {
-            window._sequentialRecursivePool = sequentialRecursivePoolData;
+            sequentialImageList = sequentialRecursivePoolData;
         }
 
+        // Current directory images for immediate display
+        let sequentialImageData = ''' + sequential_json + ''';
+        
         // Subdirectories for depth-first traversal
         currentSubdirs = ''' + json.dumps(subdirs_list, separators=(',', ':')) + ''' || [];'''
     
@@ -1845,10 +1836,15 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 lightboxImg.style.cursor = 'pointer';
                 lightboxImg.onclick = function(e) {{
                     e.stopPropagation();
-                    const newWindow = window.open(imageData.fullRes, '_blank');
-                    if (newWindow) {{
-                        newWindow.focus();
-                    }}
+                    // Use temp <a> element to avoid popup blocker
+                    const a = document.createElement('a');
+                    a.href = imageData.fullRes;
+                    a.target = '_blank';
+                    a.rel = 'noopener noreferrer';
+                    a.style.display = 'none';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
                 }};
                 
                 // Show hint for full-res click
@@ -1885,98 +1881,92 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             }}
         }}
         
-       async function loadNextDirectory() {{
-            while (subdirIndex < currentSubdirs.length) {{
-                const subdir = currentSubdirs[subdirIndex];
-                
-                console.log('Loading subdir:', subdir);
-                
-                // Use cache if available, otherwise fetch
-                let data;
-                if (subdirCache.has(subdir)) {{
-                    data = subdirCache.get(subdir);
-                }} else {{
-                    data = await fetchDirectoryData(subdir + '/');
-                    if (data) subdirCache.set(subdir, data);
-                }}
-                
-                // Enter directory if it has images OR has subdirectories to traverse
-                const hasImages = data && data.images && data.images.length > 0;
-                const hasChildren = data && data.subdirs && data.subdirs.length > 0;
-                
-                if (hasImages || hasChildren) {{
-                    // Save parent state for when we return from children
-                    subdirQueue.push({{ dirs: currentSubdirs.slice(), index: subdirIndex + 1 }});
-                    subdirIndex++;
-                    
-                    currentDirPath = subdir + '/';
-                    subdirCache.set(subdir, data);
-                    
-                    if (hasImages) {{
-                        sequentialImageList = data.images;
-                        slideshowIndex = 0;
-                    }}
-                    
-                    currentSubdirs = data.subdirs || [];
-                    subdirIndex = 0;
-                    
-                    openSlideshowImage(slideshowIndex);
-                    return true;
-                }}
-            }}
-            
-            if (subdirQueue.length > 0) {{
-                const parentState = subdirQueue.pop();
-                currentSubdirs = parentState.dirs;
-                subdirIndex = parentState.index;
-                
-                return await loadNextDirectory();
-            }}
-            
-            return false;
-        }}
+      async function loadNextDirectory() {{
+             while (subdirIndex < currentSubdirs.length) {{
+                 const subdir = currentSubdirs[subdirIndex];
+                 
+                 console.log('Loading subdir:', subdir);
+                 
+                 // Use cache if available, otherwise fetch
+                 let data;
+                 if (subdirCache.has(subdir)) {{
+                     data = subdirCache.get(subdir);
+                 }} else {{
+                     data = await fetchDirectoryData(subdir + '/');
+                     if (data) subdirCache.set(subdir, data);
+                 }}
+                 
+                 // Enter directory if it has images OR has subdirectories to traverse
+                 const hasImages = data && data.images && data.images.length > 0;
+                 const hasChildren = data && data.subdirs && data.subdirs.length > 0;
+                 
+                 if (!hasImages && !hasChildren) {{
+                     console.log('Skipping empty subdir:', subdir);
+                     subdirIndex++;
+                     continue;
+                 }}
+                 
+                 // Save parent state for when we return from children
+                 subdirQueue.push({{ dirs: currentSubdirs.slice(), index: subdirIndex + 1 }});
+                 subdirIndex++;
+                 
+                 currentDirPath = subdir + '/';
+                 subdirCache.set(subdir, data);
+                 
+                 if (hasImages) {{
+                     sequentialImageList = data.images;
+                     slideshowIndex = 0;
+                     currentSubdirs = data.subdirs || [];
+                     subdirIndex = 0;
+                     
+                     console.log('Entered dir:', subdir, 'with', sequentialImageList.length, 'images');
+                     openSlideshowImage(slideshowIndex);
+                     return true;
+                 }} else if (hasChildren) {{
+                     // Directory has no images but has children - recurse into children
+                     currentSubdirs = data.subdirs || [];
+                     subdirIndex = 0;
+                     
+                     console.log('Recurse into:', subdir, 'no direct images');
+                     const loaded = await loadNextDirectory();
+                     if (loaded) return true;
+                     // If recursion didn't find images, continue to next sibling
+                 }}
+             }}
+             
+             if (subdirQueue.length > 0) {{
+                 const parentState = subdirQueue.pop();
+                 currentSubdirs = parentState.dirs;
+                 subdirIndex = parentState.index;
+                 
+                 return await loadNextDirectory();
+             }}
+             
+             console.log('No more directories to traverse');
+             return false;
+         }}
         
-        function startSlideshow(mode) {{
-            if (mode === 'sequential') {{
-                currentMode = 'sequential';
-                slideshowIndex = 0;
-                
-                currentDirPath = '';
-                subdirQueue = [];
-                subdirIndex = 0;
-                
-                // If current dir has no images, use embedded recursive pool
-                if (sequentialImageList.length === 0) {{
-                    if (window._sequentialRecursivePool && window._sequentialRecursivePool.length > 0) {{
-                        console.log('No direct images, using recursive pool:', window._sequentialRecursivePool.length);
-                        sequentialImageList = window._sequentialRecursivePool;
-                    }} else {{
-                        alert('No images available for slideshow.');
-                        return;
-                    }}
-                }}
-                
-                // Build directory navigation list
-                const usingRecursivePool = sequentialImageList === window._sequentialRecursivePool;
-                buildDirNavList();
-                
-                // If using recursive pool fallback, ensure root dir is in the nav list
-                if (usingRecursivePool && currentDirPath === '' && dirNavList.length > 0) {{
-                    // Check if root dir already exists
-                    let rootExists = false;
-                    for (let i = 0; i < dirNavList.length; i++) {{
-                        if (dirNavList[i].path === '') {{
-                            rootExists = true;
-                            break;
-                        }}
-                    }}
-                    if (!rootExists) {{
-                        dirNavList.unshift({{ path: '', name: '.', imageCount: window._sequentialRecursivePool.length }});
-                        currentDirIndex = 0;
-                    }}
-                }}
-                
-            }} else if (mode === 'random') {{
+      function startSlideshow(mode) {{
+             if (mode === 'sequential') {{
+                 currentMode = 'sequential';
+                 slideshowIndex = 0;
+                 
+                 currentDirPath = '';
+                 subdirQueue = [];
+                 subdirIndex = 0;
+                 
+                 // Use the embedded recursive pool (all images)
+                 if (sequentialImageList.length === 0) {{
+                     alert('No images available for slideshow.');
+                     return;
+                 }}
+                 
+                 console.log('Sequential slideshow starting with', sequentialImageList.length, 'images');
+                 
+                 // Build directory navigation list
+                 buildDirNavList();
+                 
+             }} else if (mode === 'random') {{
                 if (randomPool.length === 0) {{
                     alert('No images available for random slideshow.');
                     return;
@@ -2188,6 +2178,10 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 lightboxImg.onload = function() {{
                     setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
                     updateSlideshowProgress();
+                }};
+                lightboxImg.onerror = function() {{
+                    console.error('Failed to load slideshow image:', newSrc);
+                    lightboxFilename.textContent = (imageData.filename || '') + ' [failed to load]';
                 }};
                 lightboxImg.src = newSrc;
             }}
