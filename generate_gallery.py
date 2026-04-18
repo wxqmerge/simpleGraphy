@@ -822,7 +822,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     # Build gallery grid HTML
     grid_html = ''.join(subdir_items + image_items)
     
-    # Pre-compute slideshow elements to avoid nested f-string issues (Python 3.10)
+   # Pre-compute slideshow elements to avoid nested f-string issues (Python 3.10)
     slideshow_header_html = ''
     slideshow_header_block = ''
     if enable_slideshow and (sequential_images or sequential_recursive_pool):
@@ -837,6 +837,32 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                     <label><input type="checkbox" id="fullres-check"> Full Res</label>
                 </div>
             </div>'''
+    
+    # Pre-compute JS blocks to avoid nested f-string issues (Python 3.10)
+    sequential_js_block = ''
+    if enable_slideshow:
+        sequential_js_block = '''// Sequential slideshow images (current directory only)
+        let sequentialImageData = ''' + sequential_json + ''';
+        if (sequentialImageData) {
+            sequentialImageList = sequentialImageData;
+        }
+
+        // Recursive pool as fallback when no direct images
+        const sequentialRecursivePoolData = ''' + sequential_recursive_json + ''';
+        if (sequentialRecursivePoolData && sequentialRecursivePoolData.length > 0) {
+            window._sequentialRecursivePool = sequentialRecursivePoolData;
+        }
+
+        // Subdirectories for depth-first traversal
+        currentSubdirs = ''' + json.dumps(subdirs_list, separators=(',', ':')) + ''' || [];'''
+    
+    random_js_block = ''
+    if enable_random:
+        random_js_block = '''// Random slideshow pool (recursive from current dir)
+        const randomPoolData = ''' + random_json + ''';
+        if (randomPoolData) {
+            randomPool = randomPoolData;
+        }'''
     
     # Generate complete HTML
     html_content = f'''<!DOCTYPE html>
@@ -1506,26 +1532,9 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             filename: img.alt || ''
         }}));
         
-     {f'''// Sequential slideshow images (current directory only)
-        let sequentialImageData = {sequential_json};
-        if (sequentialImageData) {{
-            sequentialImageList = sequentialImageData;
-        }}
-
-        // Recursive pool as fallback when no direct images
-        const sequentialRecursivePoolData = {sequential_recursive_json};
-        if (sequentialRecursivePoolData && sequentialRecursivePoolData.length > 0) {{
-            window._sequentialRecursivePool = sequentialRecursivePoolData;
-        }}
-
-        // Subdirectories for depth-first traversal
-        currentSubdirs = {json.dumps(subdirs_list, separators=(',', ':'))} || [];''' if enable_slideshow else ''}
+     {sequential_js_block}
         
-        {f'''// Random slideshow pool (recursive from current dir)
-        const randomPoolData = {random_json};
-        if (randomPoolData) {{
-            randomPool = randomPoolData;
-        }}''' if enable_random else ''}
+        {random_js_block}
         
         // Set lightbox orientation based on image dimensions
         function setOrientation(width, height) {{
