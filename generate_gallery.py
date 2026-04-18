@@ -49,6 +49,60 @@ IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif'}
 EXCLUDED_DIRS = {'.thumbs', '.lr', '.git', '__pycache__', 'node_modules'}
 
 
+def format_size(size_bytes):
+    """Format bytes into human-readable size."""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if abs(size_bytes) < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f} TB"
+
+
+def get_dir_size(dir_path):
+    """Get total size of all files in a directory (non-recursive)."""
+    total = 0
+    try:
+        for entry in os.scandir(dir_path):
+            if entry.is_file():
+                total += entry.stat().st_size
+    except (PermissionError, OSError):
+        pass
+    return total
+
+
+def get_recursive_dir_size(dir_path, excluded_dirs=None):
+    """Get total size of all files recursively."""
+    if excluded_dirs is None:
+        excluded_dirs = set()
+    total = 0
+    try:
+        for entry in os.scandir(dir_path):
+            if entry.is_file():
+                total += entry.stat().st_size
+            elif entry.is_dir() and entry.name not in excluded_dirs:
+                total += get_recursive_dir_size(entry.path, excluded_dirs)
+    except (PermissionError, OSError):
+        pass
+    return total
+
+
+def count_files_recursive(dir_path, pattern=None, excluded_dirs=None):
+    """Count files recursively matching optional pattern."""
+    if excluded_dirs is None:
+        excluded_dirs = set()
+    count = 0
+    try:
+        for entry in os.scandir(dir_path):
+            if entry.is_file():
+                if pattern is None or entry.name.endswith(pattern):
+                    count += 1
+            elif entry.is_dir() and entry.name not in excluded_dirs:
+                count += count_files_recursive(entry.path, pattern, excluded_dirs)
+    except (PermissionError, OSError):
+        pass
+    return count
+
+
 def parse_args():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
@@ -639,7 +693,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     
     # Collect slideshow images (recursive)
     slideshow_images = get_slideshow_images(directory, output_dir)
-    slideshow_json = json.dumps(slideshow_images)  # No HTML escaping needed for script block
+    # Use compact JSON format to reduce file size
+    slideshow_json = json.dumps(slideshow_images, separators=(',', ':'))
     
     # Build gallery grid HTML
     grid_html = ''.join(subdir_items + image_items)
@@ -1638,6 +1693,93 @@ def process_directory(directory, output_dir, root_path, thumb_size, force):
     return 0
 
 
+def calculate_metrics(root_path, output_root):
+    """Calculate gallery metrics."""
+    metrics = {}
+    
+    # Total size of all index.html files
+    html_files = count_files_recursive(output_root, '.html', EXCLUDED_DIRS)
+    html_size = 0
+    for dirpath, _, filenames in os.walk(output_root):
+        if any(d in EXCLUDED_DIRS for d in dirpath.split(os.sep)):
+            continue
+        for f in filenames:
+            if f == 'index.html':
+                try:
+                    html_size += os.path.getsize(os.path.join(dirpath, f))
+                except OSError:
+                    pass
+    metrics['html_count'] = html_files
+    metrics['html_size'] = html_size
+    
+    # Total size of original photos
+    photo_size = get_recursive_dir_size(root_path, EXCLUDED_DIRS)
+    metrics['photo_count'] = count_files_recursive(root_path, excluded_dirs=EXCLUDED_DIRS)
+    # Filter to only image extensions for count
+    metrics['photo_count'] = 0
+    for dirpath, _, filenames in os.walk(root_path):
+        if any(d in EXCLUDED_DIRS for d in dirpath.split(os.sep)):
+            continue
+        for f in filenames:
+            if Path(f).suffix.lower() in IMAGE_EXTENSIONS:
+                metrics['photo_count'] += 1
+                try:
+                    photo_size += os.path.getsize(os.path.join(dirpath, f))
+                except OSError:
+                    pass
+    metrics['photo_size'] = photo_size
+    
+    # Total size of thumbnails
+    thumb_size = 0
+    thumb_count = 0
+    for dirpath, _, filenames in os.walk(root_path):
+        if '.thumbs' not in dirpath:
+            continue
+        for f in filenames:
+            try:
+                thumb_size += os.path.getsize(os.path.join(dirpath, f))
+                thumb_count += 1
+            except OSError:
+                pass
+    metrics['thumb_count'] = thumb_count
+    metrics['thumb_size'] = thumb_size
+    
+    # Total size of LR images
+    lr_size = 0
+    lr_count = 0
+    for dirpath, _, filenames in os.walk(root_path):
+        if '.lr' not in dirpath:
+            continue
+        for f in filenames:
+            try:
+                lr_size += os.path.getsize(os.path.join(dirpath, f))
+                lr_count += 1
+            except OSError:
+                pass
+    metrics['lr_count'] = lr_count
+    metrics['lr_size'] = lr_size
+    
+    return metrics
+
+
+def print_metrics(metrics):
+    """Print formatted metrics summary."""
+    print("\n" + "=" * 50)
+    print("GALLERY METRICS")
+    print("=" * 50)
+    print(f"Original Photos:   {metrics['photo_count']:6,} files  ({format_size(metrics['photo_size'])})")
+    print(f"Thumbnails:        {metrics['thumb_count']:6,} files  ({format_size(metrics['thumb_size'])})")
+    print(f"LR Images:         {metrics['lr_count']:6,} files  ({format_size(metrics['lr_size'])})")
+    print(f"Index HTML Files:  {metrics['html_count']:6,} files  ({format_size(metrics['html_size'])})")
+    print("-" * 50)
+    total_generated = metrics['thumb_size'] + metrics['lr_size'] + metrics['html_size']
+    print(f"Total Generated:   {format_size(total_generated)}")
+    if metrics['photo_size'] > 0:
+        ratio = (total_generated / metrics['photo_size']) * 100
+        print(f"Overhead:          {ratio:.1f}% of original photos")
+    print("=" * 50)
+
+
 def walk_and_generate(root_path, output_root, thumb_size, force):
     """Recursively walk directory tree and generate galleries."""
     total_pages = 0
@@ -1676,7 +1818,11 @@ def walk_and_generate(root_path, output_root, thumb_size, force):
     print("-" * 50)
     print(f"\nComplete! Generated {total_pages} gallery page(s).")
     
-    return total_pages
+    # Calculate metrics
+    metrics = calculate_metrics(root_path, output_root)
+    print_metrics(metrics)
+    
+    return total_pages, metrics
 
 
 class TeeStream:
@@ -1726,7 +1872,13 @@ def main():
         print()
     
     # Walk directory tree and generate galleries
-    total_pages = walk_and_generate(root_path, output_root, args.thumb_size, args.force)
+    result = walk_and_generate(root_path, output_root, args.thumb_size, args.force)
+    
+    if isinstance(result, tuple):
+        total_pages, metrics = result
+    else:
+        total_pages = result
+        metrics = None
     
     if total_pages == 0:
         print("\nNo directories with images or subdirectories found.")
