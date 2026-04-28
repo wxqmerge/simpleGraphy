@@ -756,10 +756,13 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         return False
     
     dir_name = os.path.basename(directory.rstrip('/')) or 'Gallery'
-    dir_name_safe = html.escape(dir_name)
-    
-    # Build breadcrumb navigation
     rel_path = os.path.relpath(directory, root_path).replace('\\', '/')
+    gallery_root = html.escape(os.path.basename(os.path.dirname(root_path.rstrip('/'))) or 'Root')
+    if rel_path == '.':
+        dir_name_safe = gallery_root
+    else:
+        path_parts = [html.escape(p) for p in rel_path.split('/') if p]
+        dir_name_safe = gallery_root + ' ' + ' '.join(path_parts)
     if rel_path == '.':
         breadcrumbs = [{'name': 'Root', 'link': './'}]
     else:
