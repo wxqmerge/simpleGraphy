@@ -172,6 +172,12 @@ Output Structure:
         help='Max recursion depth for random pool (default: unlimited)'
     )
     
+    parser.add_argument(
+        '--apply-covers',
+        metavar='FILE',
+        help='Apply folder covers from a text file (one relative path per line)'
+    )
+    
     return parser.parse_args()
 
 
@@ -203,6 +209,97 @@ def get_subdirectories(directory):
         print(f"  [WARN] Permission denied: {directory}")
     
     return sorted(dirs, key=lambda x: os.path.basename(x).lower())
+
+
+def get_folder_cover(dirpath):
+    """Read and validate .folder_cover file.
+    
+    Returns the resolved absolute path to the cover image, or None on any failure.
+    Only accepts relative paths. Validates the file exists and has a valid image extension.
+    """
+    cover_file = os.path.join(dirpath, '.folder_cover')
+    try:
+        with open(cover_file, 'r', encoding='utf-8') as f:
+            rel_path = f.read().strip()
+    except (IOError, OSError):
+        return None
+    
+    if not rel_path:
+        return None
+    
+    # Reject absolute paths
+    if os.path.isabs(rel_path):
+        return None
+    
+    # Normalize separators
+    rel_path = rel_path.replace(os.sep, '/')
+    
+    # Resolve against dirpath
+    resolved = os.path.normpath(os.path.join(dirpath, rel_path))
+    
+    # Validate file exists
+    if not os.path.isfile(resolved):
+        return None
+    
+    # Validate image extension
+    ext = Path(resolved).suffix.lower()
+    if ext not in IMAGE_EXTENSIONS:
+        return None
+    
+    return resolved
+
+
+def ensure_folder_cover(dirpath, root_path):
+    """Ensure a directory has a valid .folder_cover file.
+    
+    If .folder_cover exists and points to a valid image, returns that path.
+    Otherwise, finds a default image (direct first, then recursive) and writes it.
+    Returns the resolved cover path, or None if no images exist.
+    """
+    existing = get_folder_cover(dirpath)
+    if existing:
+        return existing
+    
+    # Find default cover image
+    default_image = None
+    
+    # First try images directly in dirpath
+    direct_images = get_image_files(dirpath)
+    if direct_images:
+        default_image = direct_images[0]
+    
+    # Fall back to recursive search
+    if not default_image:
+        def find_first_image(path, depth=0):
+            if depth > 3:
+                return None
+            try:
+                for entry in os.scandir(path):
+                    if entry.is_file():
+                        ext = Path(entry.path).suffix.lower()
+                        if ext in IMAGE_EXTENSIONS:
+                            return entry.path
+                    elif entry.is_dir() and entry.name not in EXCLUDED_DIRS:
+                        result = find_first_image(entry.path, depth + 1)
+                        if result:
+                            return result
+            except (PermissionError, OSError):
+                pass
+            return None
+        
+        default_image = find_first_image(dirpath)
+    
+    if default_image:
+        # Compute relative path from dirpath to the image
+        rel = os.path.relpath(default_image, dirpath).replace(os.sep, '/')
+        try:
+            with open(os.path.join(dirpath, '.folder_cover'), 'w', encoding='utf-8') as f:
+                f.write(rel)
+        except (IOError, OSError) as e:
+            print(f"  [WARN] Failed to write .folder_cover for {dirpath}: {e}")
+        return default_image
+    
+    return None
 
 
 def get_slideshow_images(directory, output_dir):
@@ -325,17 +422,17 @@ def get_sibling_nav(current_dir, all_dirs_with_images, root_path):
     # Next sibling
     next_path = ''
     if idx + 1 < len(siblings):
-        next_path = os.path.relpath(siblings[idx + 1], current_dir).replace(os.sep, '/') + '/'
+        next_path = os.path.relpath(siblings[idx + 1], current_dir).replace(os.sep, '/') + '/index.html'
     
     # Prev sibling - find previous sibling, or go to parent if none
     prev_path = ''
     if idx > 0:
-        prev_path = os.path.relpath(siblings[idx - 1], current_dir).replace(os.sep, '/') + '/'
+        prev_path = os.path.relpath(siblings[idx - 1], current_dir).replace(os.sep, '/') + '/index.html'
     else:
         # No previous sibling at this level - parent is the prev
         parent = os.path.dirname(current_abs)
         if parent and parent != root_abs:
-            prev_path = os.path.relpath(parent, current_dir).replace(os.sep, '/') + '/'
+            prev_path = os.path.relpath(parent, current_dir).replace(os.sep, '/') + '/index.html'
     
     return prev_path, next_path
 
@@ -751,6 +848,9 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     images = get_image_files(directory)
     subdirs = get_subdirectories(directory)
     
+    # Ensure current directory has a .folder_cover
+    ensure_folder_cover(directory, root_path)
+    
     # Skip if no images and no subdirectories
     if not images and not subdirs:
         return False
@@ -764,17 +864,17 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         path_parts = [html.escape(p) for p in rel_path.split('/') if p]
         dir_name_safe = gallery_root + ' ' + ' '.join(path_parts)
     if rel_path == '.':
-        breadcrumbs = [{'name': 'Root', 'link': './'}]
+        breadcrumbs = [{'name': 'Root', 'link': './index.html'}]
     else:
         parts = [p for p in rel_path.split('/') if p]
         current_depth = len(parts)
         # Root goes to parent of root_path
-        breadcrumbs = [{'name': 'Root', 'link': '../' * current_depth}]
+        breadcrumbs = [{'name': 'Root', 'link': '../' * current_depth + 'index.html'}]
         for i, part in enumerate(parts):
             # Each intermediate link: go up to ancestor depth, landing exactly at it
             breadcrumbs.append({
                 'name': html.escape(part),
-                'link': '../' * (current_depth - i - 1)
+                'link': '../' * (current_depth - i - 1) + 'index.html'
             })
     
     breadcrumb_html = ''
@@ -801,6 +901,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         rel_thumb = f'.thumbs/{thumb_name}'
         rel_full = os.path.relpath(img_path, output_dir).replace(os.sep, '/')
+        gallery_path = os.path.relpath(img_path, root_path).replace(os.sep, '/')
         safe_basename = html.escape(basename)
         
         # Get EXIF data
@@ -844,7 +945,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         image_items.append(f'''
             <div class="{item_class}">
-                <img src="{rel_thumb}" alt="{safe_basename}" data-full="{lightbox_src}" data-full-res="{rel_full}" data-exif="{exif_json}">
+                <img src="{rel_thumb}" alt="{safe_basename}" data-full="{lightbox_src}" data-full-res="{rel_full}" data-exif="{exif_json}" data-gallery-path="{gallery_path}">
                 <div class="overlay">
                     <span class="filename">{safe_basename}</span>
                 </div>
@@ -854,7 +955,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     subdir_items = []
     for subdir in subdirs:
         subdir_name = os.path.basename(subdir)
-        subdir_path = os.path.relpath(subdir, output_dir).replace(os.sep, '/') + '/'
+        subdir_path = os.path.relpath(subdir, output_dir).replace(os.sep, '/') + '/index.html'
         safe_subdir_name = html.escape(subdir_name)
         
         # Count photos and sub-albums recursively
@@ -877,33 +978,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         except (PermissionError, OSError):
             pass
         
-        # Generate a preview thumbnail for the directory
-        # First try images in current folder
-        subdir_images = get_image_files(subdir)
-        source_image = None
-        
-        if subdir_images:
-            source_image = subdir_images[0]
-        else:
-            # Recursively find first image in subfolders
-            def find_first_image(path, depth=0):
-                if depth > 3:  # Limit recursion depth
-                    return None
-                for entry in os.scandir(path):
-                    if entry.is_file():
-                        ext = Path(entry.path).suffix.lower()
-                        if ext in IMAGE_EXTENSIONS:
-                            return entry.path
-                    elif entry.is_dir() and entry.name not in EXCLUDED_DIRS:
-                        result = find_first_image(entry.path, depth + 1)
-                        if result:
-                            return result
-                return None
-            
-            try:
-                source_image = find_first_image(subdir)
-            except (PermissionError, OSError):
-                pass
+        # Generate a preview thumbnail for the directory using folder cover
+        source_image = ensure_folder_cover(subdir, root_path)
         
         rel_thumb = None
         if source_image:
@@ -1653,7 +1729,29 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
              .lightbox.portrait .lightbox-exif {{
                  width: 180px;
              }}
-         }}
+          }}
+        
+        /* Cover toast notification */
+        #cover-toast {{
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.85);
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 0.9em;
+            z-index: 9999;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+            white-space: nowrap;
+        }}
+        
+        #cover-toast.visible {{
+            opacity: 1;
+        }}
     </style>
 </head>
 <body>
@@ -1678,6 +1776,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
 {grid_html if grid_html.strip() else '            <p style="color: #666; grid-column: 1/-1; text-align: center;">No images or folders found.</p>'}
         </div>
     </div>
+    
+    <div id="cover-toast"></div>
     
    <!-- Lightbox Modal -->
     <div class="lightbox" id="lightbox">
@@ -2364,6 +2464,10 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             img.addEventListener('click', (e) => {{
                 e.preventDefault();
                 e.stopPropagation();
+                if (e.altKey) {{
+                    console.log('Gallery path:', img.getAttribute('data-gallery-path'));
+                    return;
+                }}
                 openLightbox(index);
             }});
         }});
@@ -2443,7 +2547,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 }}
             }}
         }});
-        
+
     // Keyboard navigation
         document.addEventListener('keydown', (e) => {{
             if (!lightbox.classList.contains('active')) return;
@@ -2652,6 +2756,85 @@ def walk_and_generate(root_path, output_root, thumb_size, force, random_depth=No
     return total_pages, metrics
 
 
+def apply_covers(root_path, covers_file):
+    """Apply folder covers from a text file.
+    
+    Reads one relative path per line. For each line, splits into directory + filename,
+    validates the image exists, and writes a .folder_cover file.
+    """
+    if not os.path.isfile(covers_file):
+        print(f"Error: Covers file not found: {covers_file}")
+        return 1
+    
+    root_path = os.path.abspath(root_path)
+    updated = 0
+    skipped_not_found = 0
+    skipped_invalid = 0
+    skipped_no_dir = 0
+    
+    with open(covers_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip().replace('\\', '/')
+            
+            # Skip empty lines and comments
+            if not line or line.startswith('#'):
+                continue
+            
+            dir_part = os.path.dirname(line)
+            file_part = os.path.basename(line)
+            
+            if not file_part:
+                skipped_no_dir += 1
+                continue
+            
+            # Resolve cover directory
+            cover_dir = os.path.normpath(os.path.join(root_path, dir_part)) if dir_part else root_path
+            
+            # Validate cover_dir exists
+            if not os.path.isdir(cover_dir):
+                skipped_no_dir += 1
+                print(f"  [SKIP] Directory not found: {dir_part or '.'}")
+                continue
+            
+            # Resolve image path
+            image_path = os.path.join(cover_dir, file_part)
+            
+            # Validate image exists
+            if not os.path.isfile(image_path):
+                skipped_not_found += 1
+                print(f"  [SKIP] File not found: {line}")
+                continue
+            
+            # Validate image extension
+            ext = Path(image_path).suffix.lower()
+            if ext not in IMAGE_EXTENSIONS:
+                skipped_invalid += 1
+                print(f"  [SKIP] Not an image: {line}")
+                continue
+            
+            # Compute relative path from cover_dir to image
+            rel = os.path.relpath(image_path, cover_dir).replace(os.sep, '/')
+            
+            # Write .folder_cover
+            try:
+                with open(os.path.join(cover_dir, '.folder_cover'), 'w', encoding='utf-8') as cf:
+                    cf.write(rel)
+                updated += 1
+            except (IOError, OSError) as e:
+                print(f"  [ERROR] Failed to write .folder_cover for {dir_part or '.'}: {e}")
+    
+    print(f"\nApplied covers from {os.path.basename(covers_file)}:")
+    print(f"  Updated: {updated} folder(s)")
+    if skipped_not_found:
+        print(f"  Skipped: {skipped_not_found} (file not found)")
+    if skipped_invalid:
+        print(f"  Skipped: {skipped_invalid} (not an image)")
+    if skipped_no_dir:
+        print(f"  Skipped: {skipped_no_dir} (directory not found)")
+    
+    return 0
+
+
 class TeeStream:
     """Write to both stdout and a file."""
     def __init__(self, original, log_file):
@@ -2690,6 +2873,10 @@ def main():
     if not os.path.isdir(root_path):
         print(f"Error: Root directory does not exist: {root_path}")
         return 1
+    
+    # Handle --apply-covers as standalone operation
+    if args.apply_covers:
+        return apply_covers(root_path, args.apply_covers)
     
     # Check for HEIF support
     if not HEIF_SUPPORT:

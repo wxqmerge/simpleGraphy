@@ -71,6 +71,42 @@ def cleanup_lr(lr_dir, source_stems):
     return deleted
 
 
+def cleanup_folder_covers(dirpath):
+    """Check if .folder_cover exists and points to a valid image.
+    
+    Returns a list of orphaned .folder_cover paths (0 or 1 per directory).
+    """
+    cover_file = dirpath / '.folder_cover'
+    if not cover_file.is_file():
+        return []
+    
+    try:
+        rel_path = cover_file.read_text(encoding='utf-8').strip()
+    except (IOError, OSError):
+        return [str(cover_file)]
+    
+    if not rel_path:
+        return [str(cover_file)]
+    
+    # Reject absolute paths
+    if os.path.isabs(rel_path):
+        return [str(cover_file)]
+    
+    # Resolve against dirpath
+    rel_path = rel_path.replace(os.sep, '/')
+    resolved = os.path.normpath(os.path.join(str(dirpath), rel_path))
+    
+    # Check if file exists and has valid extension
+    if not os.path.isfile(resolved):
+        return [str(cover_file)]
+    
+    ext = Path(resolved).suffix.lower()
+    if ext not in IMAGE_EXTENSIONS:
+        return [str(cover_file)]
+    
+    return []
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Remove orphaned thumbnail and LR files from galleries.',
@@ -122,8 +158,10 @@ Examples:
     total_source_files = 0
     total_thumbs_found = 0
     total_lr_found = 0
+    total_covers_found = 0
     total_thumbs_deleted = 0
     total_lr_deleted = 0
+    total_covers_deleted = 0
     total_bytes_freed = 0
     
     print(f"Scanning: {root_path}")
@@ -188,6 +226,19 @@ Examples:
                 print(f"  {len(orphaned_lr)} orphaned LR file(s): {lr_paths}")
                 total_lr_deleted += len(orphaned_lr)
                 total_bytes_freed += lr_sizes
+        
+        # Check .folder_cover
+        cover_file = current_path / '.folder_cover'
+        if cover_file.is_file():
+            total_covers_found += 1
+            orphaned_covers = cleanup_folder_covers(current_path)
+            if orphaned_covers:
+                cover_paths = [str(Path(p).relative_to(root_path)) for p in orphaned_covers]
+                cover_sizes = sum(os.path.getsize(p) for p in orphaned_covers if Path(p).exists())
+                print(f"\n{rel_path}/.folder_cover")
+                print(f"  {len(orphaned_covers)} orphaned cover(s): {cover_paths}")
+                total_covers_deleted += len(orphaned_covers)
+                total_bytes_freed += cover_sizes
     
     # Summary before deletion
     print("\n" + "=" * 60)
@@ -195,6 +246,7 @@ Examples:
     print(f"  Source files found: {total_source_files}")
     print(f"  Thumbnails found: {total_thumbs_found} ({total_thumbs_deleted} orphaned)")
     print(f"  LR files found: {total_lr_found} ({total_lr_deleted} orphaned)")
+    print(f"  Folder covers found: {total_covers_found} ({total_covers_deleted} orphaned)")
     print(f"  Total size to free: {total_bytes_freed / 1024 / 1024:.2f} MB")
     
     if args.dry_run:
@@ -232,10 +284,19 @@ Examples:
                     os.remove(lr_path)
                 except OSError as e:
                     print(f"  [ERROR] Failed to delete {lr_path}: {e}")
+        
+        # Delete orphaned .folder_cover files
+        orphaned_covers = cleanup_folder_covers(current_path)
+        for cover_path in orphaned_covers:
+            try:
+                os.remove(cover_path)
+            except OSError as e:
+                print(f"  [ERROR] Failed to delete {cover_path}: {e}")
     
     print("\nDone! Deleted:")
     print(f"  - {total_thumbs_deleted} thumbnail(s)")
     print(f"  - {total_lr_deleted} LR file(s)")
+    print(f"  - {total_covers_deleted} folder cover(s)")
     print(f"  - Freed {total_bytes_freed / 1024 / 1024:.2f} MB")
     
     return 0
@@ -268,8 +329,8 @@ def cleanup_all(root_path, dry_run=False):
                     html_file.unlink()
                 deleted_files.append((html_file, size))
                 total_freed += size
-          except OSError as e:
-                    print(f"  [ERROR] Failed to delete {html_file}: {e}")
+            except OSError as e:
+                print(f"  [ERROR] Failed to delete {html_file}: {e}")
         
         # Remove .thumbs directories
         thumbs_dir = current_path / '.thumbs'
