@@ -28,6 +28,7 @@ from io import StringIO
 from pathlib import Path
 from datetime import datetime
 from PIL import Image, ExifTags
+import numpy as np
 
 # Increase max image pixels to handle panoramas
 Image.MAX_IMAGE_PIXELS = 500_000_000
@@ -45,6 +46,14 @@ except ImportError:
         HEIF_SUPPORT = True
     except ImportError:
         HEIF_SUPPORT = False
+
+# Register dlib face detection if available
+try:
+    import dlib
+    _mp_fd = dlib.get_frontal_face_detector()
+    FACE_DETECTION = True
+except ImportError:
+    FACE_DETECTION = False
 
 
 # Supported image extensions
@@ -177,7 +186,13 @@ Output Structure:
         metavar='FILE',
         help='Apply folder covers from a text file (one relative path per line)'
     )
-    
+
+    parser.add_argument(
+        '--auto-faces',
+        action='store_true',
+        help='Auto-select folder covers using face detection (requires mediapipe)'
+    )
+
     return parser.parse_args()
 
 
@@ -627,12 +642,9 @@ def get_exif_data(image_path):
                     if isinstance(val, (tuple, list)) and len(val) >= 2:
                         try:
                             return val[0] / val[1]
-                        except:
+                        except Exception:
                             return None
-                    try:
-                        return float(val)
-                    except:
-                        return None
+                    return None
                 
                 fl_35 = parse_focal(focal_35)
                 fl = parse_focal(focal)
@@ -650,6 +662,82 @@ def get_exif_data(image_path):
         pass
     
     return exif_data
+
+
+def count_faces(image_path):
+    """Count faces in an image using dlib.
+    
+    Returns the number of faces detected, or 0 on any failure.
+    """
+    if not FACE_DETECTION:
+        return 0
+    try:
+        img = Image.open(image_path)
+        img_rgb = img.convert('RGB')
+        # Downsample for speed — HOG detector works fine at smaller sizes
+        if max(img_rgb.size) > 400:
+            img_rgb.thumbnail((400, 400))
+        img_array = np.asarray(img_rgb)
+        faces = _mp_fd(img_array, 1)
+        return len(faces)
+    except Exception:
+        pass
+    return 0
+
+
+def auto_select_covers(root_path):
+    """Scan directories and auto-select covers based on face detection.
+    
+    For each directory, scans all images, picks the one with the most
+    faces, and writes .folder_cover (overwrites existing covers).
+    """
+    if not FACE_DETECTION:
+        print("[ERROR] Face detection not available.")
+        print("        Install dlib: pip install dlib")
+        return 1
+    
+    updated = 0
+    unchanged = 0
+    no_faces = 0
+    
+    for dirpath, dirnames, filenames in os.walk(root_path):
+        # Skip excluded dirs
+        dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIRS]
+        
+        images = get_image_files(dirpath)
+        if not images:
+            continue
+        
+        # Find image with most faces
+        best_image = None
+        best_count = 0
+        for img_path in images:
+            fc = count_faces(img_path)
+            if fc > best_count:
+                best_count = fc
+                best_image = img_path
+        
+        if best_image and best_count > 0:
+            rel = os.path.relpath(best_image, dirpath).replace(os.sep, '/')
+            existing = get_folder_cover(dirpath)
+            if existing and os.path.normpath(existing) == os.path.normpath(rel):
+                unchanged += 1
+            else:
+                try:
+                    with open(os.path.join(dirpath, '.folder_cover'), 'w', encoding='utf-8') as f:
+                        f.write(rel)
+                    updated += 1
+                    print(f"  [FACES {best_count}] {os.path.relpath(dirpath, root_path) or '.'}: {os.path.basename(best_image)}")
+                except (IOError, OSError) as e:
+                    print(f"  [WARN] Failed to write .folder_cover for {dirpath}: {e}")
+        else:
+            no_faces += 1
+    
+    print(f"\nFace detection complete:")
+    print(f"  Updated: {updated} folder(s)")
+    print(f"  Unchanged: {unchanged} folder(s)")
+    print(f"  No faces: {no_faces} folder(s)")
+    return 0
 
 
 def should_rebuild(source_path, thumb_path, force):
@@ -2877,7 +2965,11 @@ def main():
     # Handle --apply-covers as standalone operation
     if args.apply_covers:
         return apply_covers(root_path, args.apply_covers)
-    
+
+    # Handle --auto-faces as standalone operation
+    if args.auto_faces:
+        return auto_select_covers(root_path)
+
     # Check for HEIF support
     if not HEIF_SUPPORT:
         print("\n[WARN] HEIF/HEIC support not available!")
