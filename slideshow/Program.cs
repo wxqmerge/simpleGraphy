@@ -17,11 +17,12 @@ static class Program
     static Form? form;
     static PictureBox? pic;
 
+    [STAThread]
     static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
 
-        string dir = args.Length > 0 ? args[0] : PickFolder() ?? "";
+        string dir = args.Length > 0 ? args[0].Trim().Trim('"') : PickFolder() ?? "";
         if (string.IsNullOrEmpty(dir)) Environment.Exit(0);
         if (args.Length > 1 && int.TryParse(args[1], out int secs))
             intervalMs = secs * 1000;
@@ -216,69 +217,14 @@ static class Program
 
     static string? PickFolder()
     {
-        string? result = null;
-        var inputForm = new Form
+        using var dlg = new FolderBrowserDialog
         {
-            Text = "Select Photo Directory",
-            Size = new Size(500, 150),
-            StartPosition = FormStartPosition.CenterScreen,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
-            MaximizeBox = false,
-            MinimizeBox = false,
+            Description = "Select photo directory",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = false,
+            AutoUpgradeEnabled = true,
         };
-
-        var label = new Label
-        {
-            Text = "Photo directory:",
-            Location = new Point(12, 12),
-            AutoSize = true,
-        };
-
-        var textBox = new TextBox
-        {
-            Location = new Point(12, 36),
-            Size = new Size(460, 24),
-        };
-
-        var okBtn = new Button
-        {
-            Text = "OK",
-            Location = new Point(350, 70),
-            Size = new Size(75, 28),
-        };
-
-        var cancelBtn = new Button
-        {
-            Text = "Cancel",
-            Location = new Point(435, 70),
-            Size = new Size(75, 28),
-        };
-
-        okBtn.Click += (_, _) =>
-        {
-            string path = textBox.Text.Trim().Trim('"');
-            if (Directory.Exists(path))
-            {
-                result = path;
-                inputForm.Close();
-            }
-            else
-            {
-                MessageBox.Show(inputForm, "Directory does not exist:\n" + path, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        };
-
-        cancelBtn.Click += (_, _) => inputForm.Close();
-
-        inputForm.Controls.Add(label);
-        inputForm.Controls.Add(textBox);
-        inputForm.Controls.Add(okBtn);
-        inputForm.Controls.Add(cancelBtn);
-        inputForm.AcceptButton = okBtn;
-        inputForm.CancelButton = cancelBtn;
-
-        Application.Run(inputForm);
-        return result;
+        return dlg.ShowDialog() == DialogResult.OK ? dlg.SelectedPath : null;
     }
 
     static string DecodeString(PropertyItem p)
