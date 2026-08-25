@@ -19,14 +19,17 @@ static class Program
 
     static void Main(string[] args)
     {
-        string dir = args.Length > 0 ? args[0] : Directory.GetCurrentDirectory();
+        ApplicationConfiguration.Initialize();
+
+        string dir = args.Length > 0 ? args[0] : PickFolder() ?? "";
+        if (string.IsNullOrEmpty(dir)) Environment.Exit(0);
         if (args.Length > 1 && int.TryParse(args[1], out int secs))
             intervalMs = secs * 1000;
 
         if (!Directory.Exists(dir))
         {
-            Console.WriteLine($"Directory not found: {dir}");
-            return;
+            MessageBox.Show($"Directory not found:\n{dir}", "Slideshow", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            Environment.Exit(1);
         }
 
         string[] exts = { "*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.tiff", "*.tif" };
@@ -35,13 +38,11 @@ static class Program
 
         if (images.Count == 0)
         {
-            Console.WriteLine($"No images found in {dir}");
-            return;
+            MessageBox.Show($"No images found in:\n{dir}", "Slideshow", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            Environment.Exit(1);
         }
 
         images.Sort(StringComparer.OrdinalIgnoreCase);
-
-        ApplicationConfiguration.Initialize();
 
         var screen = Screen.PrimaryScreen.Bounds;
         form = new Form
@@ -78,7 +79,7 @@ static class Program
             switch (e.KeyCode)
             {
                 case Keys.Escape:
-                    Application.Exit();
+                    Environment.Exit(0);
                     break;
                 case Keys.Space:
                 case Keys.Enter:
@@ -110,6 +111,7 @@ static class Program
 
         Advance(0);
         Application.Run(form);
+        Environment.Exit(0);
     }
 
     static void Pic_Paint(object? sender, PaintEventArgs e)
@@ -210,6 +212,73 @@ static class Program
             parts.Add(focal);
 
         return parts;
+    }
+
+    static string? PickFolder()
+    {
+        string? result = null;
+        var inputForm = new Form
+        {
+            Text = "Select Photo Directory",
+            Size = new Size(500, 150),
+            StartPosition = FormStartPosition.CenterScreen,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false,
+        };
+
+        var label = new Label
+        {
+            Text = "Photo directory:",
+            Location = new Point(12, 12),
+            AutoSize = true,
+        };
+
+        var textBox = new TextBox
+        {
+            Location = new Point(12, 36),
+            Size = new Size(460, 24),
+        };
+
+        var okBtn = new Button
+        {
+            Text = "OK",
+            Location = new Point(350, 70),
+            Size = new Size(75, 28),
+        };
+
+        var cancelBtn = new Button
+        {
+            Text = "Cancel",
+            Location = new Point(435, 70),
+            Size = new Size(75, 28),
+        };
+
+        okBtn.Click += (_, _) =>
+        {
+            string path = textBox.Text.Trim().Trim('"');
+            if (Directory.Exists(path))
+            {
+                result = path;
+                inputForm.Close();
+            }
+            else
+            {
+                MessageBox.Show(inputForm, "Directory does not exist:\n" + path, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+
+        cancelBtn.Click += (_, _) => inputForm.Close();
+
+        inputForm.Controls.Add(label);
+        inputForm.Controls.Add(textBox);
+        inputForm.Controls.Add(okBtn);
+        inputForm.Controls.Add(cancelBtn);
+        inputForm.AcceptButton = okBtn;
+        inputForm.CancelButton = cancelBtn;
+
+        Application.Run(inputForm);
+        return result;
     }
 
     static string DecodeString(PropertyItem p)
