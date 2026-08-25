@@ -341,10 +341,12 @@ def get_slideshow_images(directory, output_dir):
                     else:
                         lightbox_src = rel_full
                     
+                    caption = read_caption(entry.path)
                     images.append({
                         'full': lightbox_src,
                         'fullRes': rel_full,
-                        'filename': entry.name
+                        'filename': entry.name,
+                        'caption': caption or ''
                     })
     except (PermissionError, OSError):
         pass
@@ -494,10 +496,12 @@ def get_random_pool(root_dir, page_dir, max_depth=None):
                     else:
                         lightbox_src = rel_full
                     
+                    caption = read_caption(entry.path)
                     pool.append({
                         'full': lightbox_src,
                         'fullRes': rel_full,
-                        'filename': entry.name
+                        'filename': entry.name,
+                        'caption': caption or ''
                     })
             elif entry.is_dir() and entry.name not in EXCLUDED_DIRS:
                 new_prefix = rel_prefix + entry.name + '/'
@@ -550,10 +554,12 @@ def build_dir_tree(root_dir, page_dir, max_depth=None):
                     else:
                         lightbox_src = rel_full
                     
+                    caption = read_caption(entry.path)
                     images.append({
                         'full': lightbox_src,
                         'fullRes': rel_full,
-                        'filename': entry.name
+                        'filename': entry.name,
+                        'caption': caption or ''
                     })
             elif entry.is_dir() and entry.name not in EXCLUDED_DIRS:
                 subdir_path = os.path.join(dir_path, entry.name)
@@ -662,6 +668,17 @@ def get_exif_data(image_path):
         pass
     
     return exif_data
+
+
+def read_caption(image_path):
+    """Read .caption file alongside an image."""
+    cap_path = image_path + '.caption'
+    try:
+        with open(cap_path, 'r', encoding='utf-8') as f:
+            content = f.read().strip()
+            return content if content else None
+    except (IOError, OSError):
+        return None
 
 
 def count_faces(image_path):
@@ -1031,10 +1048,17 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         # Use LR for lightbox if available, otherwise use full
         lightbox_src = rel_lr if rel_lr else rel_full
         
+        # Read caption if available
+        caption = read_caption(img_path)
+        safe_caption = html.escape(caption) if caption else ''
+        caption_html = f'<span class="caption">{safe_caption}</span>' if caption else ''
+        caption_data = html.escape(caption) if caption else ''
+        
         image_items.append(f'''
             <div class="{item_class}">
-                <img src="{rel_thumb}" alt="{safe_basename}" data-full="{lightbox_src}" data-full-res="{rel_full}" data-exif="{exif_json}" data-gallery-path="{gallery_path}">
+                <img src="{rel_thumb}" alt="{safe_basename}" data-full="{lightbox_src}" data-full-res="{rel_full}" data-exif="{exif_json}" data-gallery-path="{gallery_path}" data-caption="{caption_data}">
                 <div class="overlay">
+                    {caption_html}
                     <span class="filename">{safe_basename}</span>
                 </div>
             </div>''')
@@ -1444,10 +1468,10 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             right: 0;
             background: linear-gradient(transparent, rgba(0,0,0,0.8));
             padding: 30px 10px 10px;
-            opacity: 0;
+            opacity: 1;
             transition: opacity 0.2s;
         }}
-        
+
         .gallery-item:hover .overlay {{
             opacity: 1;
         }}
@@ -1459,6 +1483,28 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+        }}
+
+        .caption {{
+            font-size: 0.9em;
+            color: #fff;
+            display: block;
+            padding: 4px 8px;
+            background: rgba(0, 0, 0, 0.5);
+            margin: 0 8px;
+            border-radius: 4px;
+            line-height: 1.3;
+            word-wrap: break-word;
+        }}
+
+        .lightbox-caption {{
+            text-align: center;
+            padding: 10px 20px;
+            color: #fff;
+            font-size: 1em;
+            line-height: 1.4;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 1002;
         }}
         
         /* Lightbox Modal */
@@ -1890,6 +1936,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             <div class="lightbox-image-container">
                 <img id="lightbox-img" src="" alt="">
             </div>
+            <div class="lightbox-caption" id="lightbox-caption"></div>
             <div class="lightbox-filename" id="lightbox-filename"></div>
         </div>
     </div>
@@ -1906,6 +1953,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         const lightbox = document.getElementById('lightbox');
         const lightboxImg = document.getElementById('lightbox-img');
         const lightboxExif = document.getElementById('lightbox-exif');
+        const lightboxCaption = document.getElementById('lightbox-caption');
         const lightboxFilename = document.getElementById('lightbox-filename');
         const closeBtn = document.querySelector('.lightbox-close');
         const prevBtn = document.getElementById('prev-btn');
@@ -1958,7 +2006,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             full: img.getAttribute('data-full'),
             fullRes: img.getAttribute('data-full-res'),
             exif: img.getAttribute('data-exif'),
-            filename: img.alt || ''
+            filename: img.alt || '',
+            caption: img.getAttribute('data-caption') || ''
         }}));
         
        {sequential_js_block}
@@ -2061,6 +2110,14 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 lightboxImg.removeAttribute('data-orientation');
             }}
             
+            // Display caption
+            if (imageData.caption) {{
+                lightboxCaption.textContent = imageData.caption;
+                lightboxCaption.style.display = '';
+            }} else {{
+                lightboxCaption.style.display = 'none';
+            }}
+
             // Display filename at bottom
             lightboxFilename.textContent = imageData.filename || '';
             
@@ -2394,16 +2451,24 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         function openSlideshowImage(index) {{
             if (index < 0 || index >= (currentMode === 'sequential' ? sequentialImageList.length : randomPool.length)) return;
-            
+
             slideshowIndex = index;
             const imageData = currentMode === 'sequential' ? sequentialImageList[index] : randomPool[index];
-            
+
             lightbox.classList.add('active', 'slideshow-active');
             lightbox.classList.remove('portrait');
             lightbox.classList.add('landscape');
             slideshowControls.style.display = 'flex';
             document.body.style.overflow = 'hidden';
-            
+
+            // Set caption
+            if (imageData.caption) {{
+                lightboxCaption.textContent = imageData.caption;
+                lightboxCaption.style.display = '';
+            }} else {{
+                lightboxCaption.style.display = 'none';
+            }}
+
             const newSrc = imageData.full;
             if (lightboxImg.src === newSrc && lightboxImg.naturalWidth) {{
                 setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
@@ -2433,7 +2498,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 }}
                 return;
             }}
-            
+
             const tempImg = new Image();
             tempImg.onload = function() {{
                 lightboxImg.src = newSrc;
