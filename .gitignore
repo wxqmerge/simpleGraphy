@@ -177,7 +177,10 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Abstra
+# Slideshow build artifacts
+slideshow/bin/
+slideshow/dist/
+slideshow/obj/
 # Abstra is an AI-powered process automation framework.
 # Ignore directories containing user credentials, local state, and settings.
 # Learn more at https://abstra.io/docs
