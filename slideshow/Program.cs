@@ -16,6 +16,8 @@ static class Program
     static List<string> infoParts = new();
     static Form? form;
     static PictureBox? pic;
+    static Image? currentImage;
+    static int screenIdx = 0;
 
     [STAThread]
     static void Main(string[] args)
@@ -45,7 +47,6 @@ static class Program
 
         images.Sort(StringComparer.OrdinalIgnoreCase);
 
-        var screen = Screen.PrimaryScreen.Bounds;
         form = new Form
         {
             Text = "Slideshow",
@@ -53,9 +54,8 @@ static class Program
             BackColor = Color.Black,
             KeyPreview = true,
             StartPosition = FormStartPosition.Manual,
-            Location = new Point(screen.Left, screen.Top),
-            Size = new Size(screen.Width, screen.Height),
         };
+        ApplyScreen();
 
         pic = new PictureBox
         {
@@ -100,12 +100,17 @@ static class Program
                     isPlaying = false;
                     Advance(+1);
                     break;
+                case Keys.S:
+                    screenIdx = (screenIdx + 1) % Screen.AllScreens.Length;
+                    ApplyScreen();
+                    break;
             }
         };
 
-        form.MouseClick += (_, e) =>
+        pic.MouseClick += (_, e) =>
         {
             isPlaying = false;
+            try { Clipboard.SetText(images[index]); } catch { }
             if (e.Button == MouseButtons.Left) Advance(+1);
             else if (e.Button == MouseButtons.Right) Advance(-1);
         };
@@ -120,14 +125,23 @@ static class Program
         if (pic == null) return;
         var g = e.Graphics;
 
-        string name = Path.GetFileName(images[index]);
+        int cw = pic.ClientSize.Width;
+        int ch = pic.ClientSize.Height;
+        if (currentImage != null && cw > 0 && ch > 0)
+        {
+            float scale = Math.Min((float)cw / currentImage.Width, (float)ch / currentImage.Height);
+            int iw = (int)(currentImage.Width * scale);
+            int ih = (int)(currentImage.Height * scale);
+            g.DrawImage(currentImage, (cw - iw) / 2, (ch - ih) / 2, iw, ih);
+        }
+
         string status = isPlaying ? "" : "  [PAUSED]";
 
         var lines = new List<string>
         {
             $"{index + 1}/{images.Count}",
-            name,
         };
+        lines.AddRange(WrapPath(images[index]));
         lines.AddRange(infoParts);
         if (!string.IsNullOrEmpty(status))
             lines.Add(status.Trim());
@@ -144,6 +158,11 @@ static class Program
         fg.Dispose();
     }
 
+    static void ApplyScreen()
+    {
+        form!.Bounds = Screen.AllScreens[screenIdx % Screen.AllScreens.Length].Bounds;
+    }
+
     static void Advance(int dir)
     {
         index = (index + dir + images.Count) % images.Count;
@@ -156,16 +175,19 @@ static class Program
         string name = Path.GetFileName(path);
         try
         {
-            pic!.Image?.Dispose();
             using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
             using var img = Image.FromStream(fs);
+            img.RotateFlip(GetRotateFlip(img));
 
             infoParts = BuildInfo(img, path);
-            pic.Image = (Image)img.Clone();
+            currentImage?.Dispose();
+            currentImage = (Image)img.Clone();
         }
         catch
         {
             infoParts = new List<string> { $"Cannot load: {name}" };
+            currentImage?.Dispose();
+            currentImage = null;
         }
         pic?.Invalidate();
     }
@@ -227,6 +249,29 @@ static class Program
         return dlg.ShowDialog() == DialogResult.OK ? dlg.SelectedPath : null;
     }
 
+    static RotateFlipType GetRotateFlip(Image img)
+    {
+        foreach (var p in img.PropertyItems)
+        {
+            if (p.Id == 0x0112 && p.Value != null && p.Value.Length >= 2)
+            {
+                int o = BitConverter.ToInt16(p.Value, 0);
+                return o switch
+                {
+                    2 => RotateFlipType.RotateNoneFlipX,
+                    3 => RotateFlipType.Rotate180FlipNone,
+                    4 => RotateFlipType.RotateNoneFlipY,
+                    5 => RotateFlipType.Rotate90FlipX,
+                    6 => RotateFlipType.Rotate90FlipNone,
+                    7 => RotateFlipType.Rotate270FlipX,
+                    8 => RotateFlipType.Rotate270FlipNone,
+                    _ => RotateFlipType.RotateNoneFlipNone,
+                };
+            }
+        }
+        return RotateFlipType.RotateNoneFlipNone;
+    }
+
     static string DecodeString(PropertyItem p)
     {
         if (p.Value == null) return "";
@@ -234,6 +279,48 @@ static class Program
         foreach (byte b in p.Value)
             if (b != 0) sb.Append((char)b);
         return sb.ToString().Trim();
+    }
+
+    static List<string> WrapPath(string path)
+    {
+        var segs = path.Split(new[] { '\\', '/' }, StringSplitOptions.None);
+        int n = segs.Length;
+        if (n == 0) return new List<string> { path };
+
+        int[] dp = new int[n + 1];
+        int[] next = new int[n + 1];
+        dp[n] = 0;
+        for (int i = n - 1; i >= 0; i--)
+        {
+            dp[i] = int.MaxValue;
+            int len = 0;
+            for (int j = i; j < n; j++)
+            {
+                len = j == i ? segs[j].Length : len + 1 + segs[j].Length;
+                int lineMax = Math.Max(len, dp[j + 1]);
+                if (lineMax < dp[i])
+                {
+                    dp[i] = lineMax;
+                    next[i] = j;
+                }
+            }
+        }
+
+        var lines = new List<string>();
+        int start = 0;
+        while (start < n)
+        {
+            int j = next[start];
+            var sb = new StringBuilder();
+            for (int k = start; k <= j; k++)
+            {
+                if (k > start) sb.Append('/');
+                sb.Append(segs[k]);
+            }
+            lines.Add(sb.ToString());
+            start = j + 1;
+        }
+        return lines;
     }
 
     static string HumanSize(long bytes)
