@@ -181,6 +181,9 @@ cython_debug/
 slideshow/bin/
 slideshow/dist/
 slideshow/obj/
+random/bin/
+random/dist/
+random/obj/
 # Abstra is an AI-powered process automation framework.
 # Ignore directories containing user credentials, local state, and settings.
 # Learn more at https://abstra.io/docs

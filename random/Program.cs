@@ -4,12 +4,13 @@ using System.IO;
 using System.Text;
 using System.Windows.Forms;
 
-namespace Slideshow;
+namespace RandomSlideshow;
 
 static class Program
 {
     static List<string> images = new();
-    static int index = 0;
+    static List<int> order = new();
+    static int pos = 0;
     static System.Windows.Forms.Timer? timer;
     static int intervalMs = 5000;
     static bool isPlaying = true;
@@ -31,7 +32,7 @@ static class Program
 
         if (!Directory.Exists(dir))
         {
-            MessageBox.Show($"Directory not found:\n{dir}", "Slideshow", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show($"Directory not found:\n{dir}", "Slideshow (Random)", MessageBoxButtons.OK, MessageBoxIcon.Error);
             Environment.Exit(1);
         }
 
@@ -41,15 +42,24 @@ static class Program
 
         if (images.Count == 0)
         {
-            MessageBox.Show($"No images found in:\n{dir}", "Slideshow", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            MessageBox.Show($"No images found in:\n{dir}", "Slideshow (Random)", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             Environment.Exit(1);
         }
 
         images.Sort(StringComparer.OrdinalIgnoreCase);
 
+        order = new List<int>(images.Count);
+        for (int i = 0; i < images.Count; i++) order.Add(i);
+        var rng = new Random();
+        for (int i = order.Count - 1; i > 0; i--)
+        {
+            int j = rng.Next(i + 1);
+            (order[i], order[j]) = (order[j], order[i]);
+        }
+
         form = new Form
         {
-            Text = "Slideshow",
+            Text = "Slideshow (Random)",
             FormBorderStyle = FormBorderStyle.None,
             BackColor = Color.Black,
             KeyPreview = true,
@@ -110,7 +120,7 @@ static class Program
         pic.MouseClick += (_, e) =>
         {
             isPlaying = false;
-            try { Clipboard.SetText(images[index]); } catch { }
+            try { Clipboard.SetText(images[order[pos]]); } catch { }
             if (e.Button == MouseButtons.Left) Advance(+1);
             else if (e.Button == MouseButtons.Right) Advance(-1);
         };
@@ -135,11 +145,12 @@ static class Program
             g.DrawImage(currentImage, (cw - iw) / 2, (ch - ih) / 2, iw, ih);
         }
 
+        int index = order[pos];
         string status = isPlaying ? "" : "  [PAUSED]";
 
         var lines = new List<string>
         {
-            $"{index + 1}/{images.Count}",
+            $"{pos + 1}/{images.Count}",
         };
         lines.AddRange(WrapPath(images[index]));
         lines.AddRange(infoParts);
@@ -165,13 +176,13 @@ static class Program
 
     static void Advance(int dir)
     {
-        index = (index + dir + images.Count) % images.Count;
+        pos = (pos + dir + order.Count) % order.Count;
         ShowImage();
     }
 
     static void ShowImage()
     {
-        string path = images[index];
+        string path = images[order[pos]];
         string name = Path.GetFileName(path);
         try
         {
