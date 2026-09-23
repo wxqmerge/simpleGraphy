@@ -39,6 +39,7 @@ NGINX_CONF="/etc/nginx/sites-available/${SUBDOMAIN}"
 NGINX_ENABLED="/etc/nginx/sites-enabled/${SUBDOMAIN}"
 CERTBOT_WELLKNOWN="/var/www/certbot"
 DEPLOY_USER="$(whoami)"
+SHARED_GROUP="www-data"
 
 # ---- Args -------------------------------------------------------------------
 DRY_RUN=0
@@ -63,8 +64,7 @@ for arg in "$@"; do
   esac
 done
 
-# run a command, or just print it in dry-run mode
-run()  { if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] $*"; else "$@"; fi; }
+# run a sudo command, or just print it in dry-run mode
 srun() { if [ "$DRY_RUN" = 1 ]; then echo "  [dry-run] sudo $*"; else sudo "$@"; fi; }
 
 echo "=== Deploying gallery to https://${FULL_DOMAIN} ==="
@@ -88,15 +88,27 @@ fi
 # 1. Copy gallery to web root
 echo "[1/4] Copying gallery to $WEB_ROOT ..."
 srun mkdir -p "$WEB_ROOT"
-srun chown "${DEPLOY_USER}:www-data" "$WEB_ROOT"
+# Give the deploy user ownership of the top dir so rsync (run as that user) can write.
+srun chown "${DEPLOY_USER}:${SHARED_GROUP}" "$WEB_ROOT"
 if [ "$DRY_RUN" = 1 ]; then
-  echo "  [dry-run] rsync -a --delete $SRC_DIR/ $WEB_ROOT/"
+  echo "  [dry-run] rsync -a --delete $SRC_DIR/ $WEB_ROOT/   (skipped if source == web root)"
+  echo "  [dry-run] sudo chown -R $DEPLOY_USER:$SHARED_GROUP $WEB_ROOT"
+  echo "  [dry-run] find $WEB_ROOT -type d -exec chmod 755 {} +"
+  echo "  [dry-run] find $WEB_ROOT -type f -exec chmod 644 {} +"
 else
   if ! command -v rsync &>/dev/null; then
     echo "ERROR: rsync not installed. Install it: sudo apt install rsync"
     exit 1
   fi
-  rsync -a --delete "$SRC_DIR/" "$WEB_ROOT/"
+  SRC_ABS="$(cd "$SRC_DIR" && pwd)"
+  WEB_ABS="$(cd "$WEB_ROOT" && pwd)"
+  if [ "$SRC_ABS" = "$WEB_ABS" ]; then
+    echo "  Source and web root are the same directory — serving in place, skipping copy."
+  else
+    rsync -a --delete "$SRC_DIR/" "$WEB_ROOT/"
+  fi
+  # Fix ownership and permissions (same as hiker): deploy user owns, www-data group reads
+  srun chown -R "${DEPLOY_USER}:${SHARED_GROUP}" "$WEB_ROOT"
   find "$WEB_ROOT" -type d -exec chmod 755 {} +
   find "$WEB_ROOT" -type f -exec chmod 644 {} +
 fi
@@ -107,6 +119,23 @@ echo "[2/4] Writing nginx config to $NGINX_CONF ..."
 if [ "$DRY_RUN" = 1 ]; then
   echo "  [dry-run] would write nginx config for $FULL_DOMAIN (HTTP->HTTPS + ACME + static root $WEB_ROOT)"
 else
+  # Choose the http2 syntax for this nginx version.
+  #   nginx >= 1.25: "http2 on;" as its own directive (new syntax)
+  #   nginx <  1.25: "http2" appended to the listen line (old syntax; still works on 1.25+)
+  HTTP2_SUFFIX=" http2"
+  HTTP2_DIRECTIVE=""
+  if command -v nginx &>/dev/null; then
+    NGINX_VER="$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')"
+    if [ -n "$NGINX_VER" ]; then
+      MAJOR="${NGINX_VER%%.*}"
+      MINOR="${NGINX_VER#*.}"; MINOR="${MINOR%%.*}"
+      if [ "$MAJOR" -gt 1 ] || { [ "$MAJOR" -eq 1 ] && [ "$MINOR" -ge 25 ]; }; then
+        HTTP2_SUFFIX=""
+        HTTP2_DIRECTIVE="http2 on;"
+      fi
+    fi
+  fi
+
   CONF_TMP="$(mktemp)"
   cat > "$CONF_TMP" <<NGINX
 server {
@@ -125,9 +154,9 @@ server {
 }
 
 server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    http2 on;
+    listen 443 ssl${HTTP2_SUFFIX};
+    listen [::]:443 ssl${HTTP2_SUFFIX};
+    ${HTTP2_DIRECTIVE}
     server_name ${FULL_DOMAIN};
 
     ssl_certificate /etc/letsencrypt/live/${FULL_DOMAIN}/fullchain.pem;
@@ -138,9 +167,9 @@ server {
     root ${WEB_ROOT};
     index index.html;
 
-    # Cache images (mirrors galleries/.htaccess)
+    # Cache images (mirrors galleries/.htaccess). nginx units: s m h d w M (no "month").
     location ~* \.(jpg|jpeg|png|gif|webp|heic|heif|svg)\$ {
-        expires 1 month;
+        expires 30d;
         add_header Cache-Control "public";
     }
 
@@ -180,11 +209,12 @@ if [ "$DRY_RUN" = 1 ]; then
   echo "  [dry-run] sudo nginx -t && sudo systemctl restart nginx"
 else
   srun ln -sf "$NGINX_CONF" "$NGINX_ENABLED"
-  if sudo nginx -t 2>&1 | grep -q "syntax is ok"; then
+  if sudo nginx -t; then
     srun systemctl restart nginx
     echo "  Nginx restarted."
   else
-    echo "  ERROR: Nginx config test failed."
+    echo "  ERROR: Nginx config test failed (output above)."
+    echo "  NOTE: nginx is currently STOPPED (it was stopped for certbot). Start it: sudo systemctl start nginx"
     exit 1
   fi
 fi
