@@ -5,6 +5,9 @@ __pycache__/
 
 galleries/
 
+# Local llama-server launcher (machine-specific, not for the repo)
+runq36MTP27Bvision.bat
+
 # C extensions
 *.so
 
