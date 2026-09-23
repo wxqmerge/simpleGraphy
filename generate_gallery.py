@@ -59,6 +59,11 @@ except ImportError:
 # Supported image extensions
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif'}
 
+# Browser-playable video extensions (shown as clickable posters that play in a lightbox).
+# .mov is excluded: iPhone .mov files are usually HEVC, which Chrome/Firefox can't play.
+# Convert .mov -> .mp4 (H.264) first, then it appears here.
+VIDEO_EXTENSIONS = {'.mp4', '.webm', '.m4v'}
+
 # Excluded directories (not included in galleries)
 EXCLUDED_DIRS = {'.thumbs', '.lr', '.git', '__pycache__', 'node_modules'}
 
@@ -211,6 +216,58 @@ def get_image_files(directory):
         print(f"  [WARN] Error scanning {directory}: {e}")
     
     return sorted(images, key=lambda x: os.path.basename(x).lower())
+
+
+def get_video_files(directory):
+    """Get list of video files in directory (not subdirectories)."""
+    videos = []
+    try:
+        for entry in os.scandir(directory):
+            if entry.is_file():
+                ext = Path(entry.path).suffix.lower()
+                if ext in VIDEO_EXTENSIONS:
+                    videos.append(entry.path)
+    except (PermissionError, OSError):
+        pass
+    return sorted(videos, key=lambda x: os.path.basename(x).lower())
+
+
+def get_video_dimensions(video_path):
+    """Get video dimensions (width, height) via ffprobe. Returns (0, 0) on failure."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+             '-show_entries', 'stream=width,height', '-of', 'csv=p=0', str(video_path)],
+            capture_output=True, text=True, timeout=30
+        )
+        parts = result.stdout.strip().split(',')
+        if len(parts) >= 2:
+            return int(parts[0]), int(parts[1])
+    except Exception:
+        pass
+    return 0, 0
+
+
+def generate_video_poster(video_path, thumb_path, thumb_size):
+    """Extract a representative frame (midpoint) from a video and save as a JPEG thumbnail."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+             '-of', 'default=noprint_wrappers=1:nokey=1', str(video_path)],
+            capture_output=True, text=True, timeout=30
+        )
+        duration = float(result.stdout.strip())
+        mid = duration * 0.5
+        thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        cmd = ['ffmpeg', '-y', '-ss', f'{mid:.3f}', '-i', str(video_path),
+               '-frames:v', '1', '-vf', f'scale={thumb_size}:-2', '-q:v', '2', str(thumb_path)]
+        subprocess.run(cmd, capture_output=True, timeout=180)
+        return thumb_path.exists()
+    except Exception as e:
+        print(f"  [ERROR] Failed to create video poster for {Path(video_path).name}: {e}")
+        return False
 
 
 def get_subdirectories(directory):
@@ -1062,7 +1119,38 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                     <span class="filename">{safe_basename}</span>
                 </div>
             </div>''')
-    
+
+    # Generate video items (clickable posters that play in a video lightbox)
+    video_items = []
+    for vid_path in get_video_files(directory):
+        basename = os.path.basename(vid_path)
+        stem = Path(basename).stem
+        thumb_name = f"{stem}_video_thumb.jpg"
+        thumb_path = Path(thumbs_dir) / thumb_name
+
+        if should_rebuild(vid_path, thumb_path, force):
+            if not generate_video_poster(vid_path, thumb_path, thumb_size):
+                continue
+        if not thumb_path.exists():
+            continue
+
+        rel_thumb = f'.thumbs/{thumb_name}'
+        rel_video = os.path.relpath(vid_path, output_dir).replace(os.sep, '/')
+        caption = read_caption(vid_path)
+        safe_caption = html.escape(caption) if caption else ''
+        w, h = get_video_dimensions(vid_path)
+        is_landscape = w > h if (w and h) else False
+        item_class = 'gallery-item video landscape' if is_landscape else 'gallery-item video portrait'
+
+        video_items.append(f'''
+            <div class="{item_class}">
+                <img src="{rel_thumb}" alt="{html.escape(basename)}" data-video="{rel_video}" data-caption="{safe_caption}">
+                <span class="video-badge">&#9654;</span>
+                <div class="overlay">
+                    <span class="filename">{html.escape(basename)}</span>
+                </div>
+            </div>''')
+
     # Generate subdirectory items
     subdir_items = []
     for subdir in subdirs:
@@ -1152,7 +1240,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         random_json = '[]'
     
     # Build gallery grid HTML
-    grid_html = ''.join(subdir_items + image_items)
+    grid_html = ''.join(subdir_items + image_items + video_items)
     
    # Pre-compute slideshow elements to avoid nested f-string issues (Python 3.10)
     slideshow_header_html = ''
@@ -1702,7 +1790,53 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             white-space: nowrap;
             z-index: 1002;
         }}
-        
+
+        /* Video lightbox */
+        .video-lightbox {{
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.95);
+            z-index: 10000;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+        }}
+        .video-lightbox.active {{ display: flex; }}
+        .video-lightbox video {{
+            max-width: 90vw;
+            max-height: 82vh;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
+            background: #000;
+        }}
+        .video-lightbox-close {{
+            position: absolute;
+            top: 15px; right: 25px;
+            font-size: 42px;
+            color: #fff;
+            cursor: pointer;
+            line-height: 1;
+            z-index: 10001;
+        }}
+        .video-lightbox-close:hover {{ color: #4fc3f7; }}
+        .video-lightbox-caption {{
+            color: #eee;
+            margin-top: 15px;
+            font-size: 0.9em;
+            text-align: center;
+            max-width: 80vw;
+        }}
+        .video-badge {{
+            position: absolute;
+            top: 8px; right: 8px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 0.75em;
+            z-index: 2;
+        }}
+
         /* Slideshow controls overlay */
         .slideshow-controls {{
             position: absolute;
@@ -1940,7 +2074,14 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             <div class="lightbox-filename" id="lightbox-filename"></div>
         </div>
     </div>
-    
+
+    <!-- Video lightbox -->
+    <div class="video-lightbox" id="video-lightbox">
+        <span class="video-lightbox-close">&times;</span>
+        <video id="video-player" controls autoplay playsinline></video>
+        <div class="video-lightbox-caption" id="video-caption"></div>
+    </div>
+
     {inline_slideshow_data}<script>
         // HTML escape function for EXIF display
         function escapeHtml(text) {{
@@ -2624,7 +2765,54 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 openLightbox(index);
             }});
         }});
-        
+
+        // Video lightbox
+        const videoLightbox = document.getElementById('video-lightbox');
+        const videoPlayer = document.getElementById('video-player');
+        const videoCaption = document.getElementById('video-caption');
+        const videoCloseBtn = document.querySelector('.video-lightbox-close');
+
+        function openVideoLightbox(src, caption) {{
+            videoPlayer.src = src;
+            videoCaption.textContent = caption || '';
+            videoCaption.style.display = caption ? '' : 'none';
+            videoLightbox.classList.add('active');
+            document.body.style.overflow = 'hidden';
+            videoPlayer.play().catch(() => {{}});
+        }}
+
+        function closeVideoLightbox() {{
+            videoLightbox.classList.remove('active');
+            videoPlayer.pause();
+            videoPlayer.removeAttribute('src');
+            videoPlayer.load();
+            document.body.style.overflow = '';
+        }}
+
+        // Click on video posters to open the video lightbox
+        document.querySelectorAll('.gallery-item img[data-video]').forEach(img => {{
+            img.addEventListener('click', (e) => {{
+                e.preventDefault();
+                e.stopPropagation();
+                openVideoLightbox(img.getAttribute('data-video'), img.getAttribute('data-caption') || '');
+            }});
+        }});
+
+        videoCloseBtn.addEventListener('click', (e) => {{
+            e.stopPropagation();
+            closeVideoLightbox();
+        }});
+
+        videoLightbox.addEventListener('click', (e) => {{
+            if (e.target === videoLightbox) closeVideoLightbox();
+        }});
+
+        document.addEventListener('keydown', (e) => {{
+            if (e.key === 'Escape' && videoLightbox.classList.contains('active')) {{
+                closeVideoLightbox();
+            }}
+        }});
+
      // Navigation buttons
         prevBtn.addEventListener('click', (e) => {{
             e.stopPropagation();
