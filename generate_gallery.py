@@ -3097,6 +3097,44 @@ def walk_and_generate(root_path, output_root, thumb_size, force, random_depth=No
     return total_pages, metrics
 
 
+def fix_permissions(*paths):
+    """Set web-safe permissions on the gallery tree (dirs 755, files 644).
+
+    Mirrors the hiker deploy: nginx (www-data) needs read access to serve
+    files and traverse directories. World-read is sufficient, so no chown is
+    required. Only applies on POSIX; a no-op on Windows.
+    """
+    if os.name != 'posix':
+        return
+    seen = set()
+    dirs = 0
+    files = 0
+    for root in paths:
+        root = os.path.abspath(root)
+        if root in seen:
+            continue
+        seen.add(root)
+        try:
+            os.chmod(root, 0o755)
+            dirs += 1
+        except OSError:
+            pass
+        for dirpath, dirnames, filenames in os.walk(root):
+            for d in dirnames:
+                try:
+                    os.chmod(os.path.join(dirpath, d), 0o755)
+                    dirs += 1
+                except OSError:
+                    pass
+            for f in filenames:
+                try:
+                    os.chmod(os.path.join(dirpath, f), 0o644)
+                    files += 1
+                except OSError:
+                    pass
+    print(f"\nPermissions: {dirs} dir(s) -> 755, {files} file(s) -> 644")
+
+
 def apply_covers(root_path, covers_file):
     """Apply folder covers from a text file.
     
@@ -3241,7 +3279,10 @@ def main():
     
     if total_pages == 0:
         print("\nNo directories with images or subdirectories found.")
-    
+
+    # Set web-safe permissions (dirs 755, files 644) so nginx can serve the gallery
+    fix_permissions(root_path, output_root)
+
     # Restore stdout and close log file
     if log_file:
         sys.stdout = sys.__stdout__

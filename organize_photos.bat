@@ -1,3 +1,69 @@
 @echo off
-powershell -ExecutionPolicy Bypass -File "%~dp0organize_photos.ps1"
+setlocal
+set "SCRIPT_DIR=%~dp0"
+
+REM ============================================================
+REM  organize_photos.bat
+REM
+REM  Sorts photos in a folder into YYMM subfolders based on the
+REM  date encoded in each filename.
+REM
+REM  HOW TO RUN
+REM    Double-click this file             Organize the folder it lives in
+REM    organize_photos.bat                Organize the current folder
+REM    organize_photos.bat "C:\MyPhotos"  Organize a specific folder
+REM    organize_photos.bat -h             Show this help
+REM
+REM  OPTIONS
+REM    <folder>          Target directory (default: current directory)
+REM    -h, -?, /?, --help   Show help
+REM
+REM  WHAT IT DOES
+REM    - Matches filenames like  2024.05.17_...  or  PXL_20240517...
+REM    - Moves each photo into a YYMMDD folder (e.g. 250517)
+REM    - Also moves .caption / .xmp sidecar files along with it
+REM    - Skips a file if the target already exists (no overwrite)
+REM ============================================================
+
+REM --- Parse arguments ---
+set "TARGET="
+:parse
+if "%~1"=="" goto run
+if /I "%~1"=="-h" goto help
+if /I "%~1"=="-?" goto help
+if /I "%~1"=="/?" goto help
+if /I "%~1"=="--help" goto help
+if not defined TARGET set "TARGET=%~1"
+shift
+goto parse
+
+REM --- Show help ---
+:help
+echo Usage: organize_photos.bat [folder] [options]
+echo.
+echo   (no args)            Organize the current folder
+echo   folder               Organize the given folder
+echo   -h, -?, /?, --help  Show this help
+echo.
+echo Photos are sorted into YYMMDD subfolders by the date in the filename.
+goto end
+
+REM --- Run ---
+:run
+if defined TARGET (
+    if not exist "%TARGET%\\" (
+        echo ERROR: Folder not found: %TARGET%
+        goto end
+    )
+    echo Organizing: %TARGET%
+    pushd "%TARGET%"
+    powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%organize_photos.ps1"
+    popd
+) else (
+    echo Organizing: %CD%
+    powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%organize_photos.ps1"
+)
+
+:end
+endlocal
 pause
