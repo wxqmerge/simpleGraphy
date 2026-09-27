@@ -5,8 +5,9 @@ set "SCRIPT_DIR=%~dp0"
 REM ============================================================
 REM  organize_photos.bat
 REM
-REM  Sorts photos in a folder into YYMM subfolders based on the
-REM  date encoded in each filename.
+REM  Sorts photos in a folder into YYMMDD subfolders.
+REM  Files whose name has no date (e.g. raw ARW) are renamed using
+REM  their EXIF capture date, then sorted.
 REM
 REM  HOW TO RUN
 REM    Double-click this file             Organize the folder it lives in
@@ -19,10 +20,13 @@ REM    <folder>          Target directory (default: current directory)
 REM    -h, -?, /?, --help   Show help
 REM
 REM  WHAT IT DOES
-REM    - Matches filenames like  2024.05.17_...  or  PXL_20240517...
+REM    - Name has a date (2024.05.17_... or PXL_20240517...) -> moved as-is
+REM    - Name has NO date (raw ARW/CR2/NEF) -> renamed to
+REM      YYYY.MM.DDHH.MM.SS<name> from the EXIF capture date, then moved
 REM    - Moves each photo into a YYMMDD folder (e.g. 250517)
-REM    - Also moves .caption / .xmp sidecar files along with it
+REM    - Also moves .caption / .xmp sidecar files along (renamed to match)
 REM    - Skips a file if the target already exists (no overwrite)
+REM    - Needs exiftool for the no-date case (C:\Users\wxqme\bin\exiftool.exe)
 REM ============================================================
 
 REM --- Parse arguments ---
@@ -45,7 +49,11 @@ echo   (no args)            Organize the current folder
 echo   folder               Organize the given folder
 echo   -h, -?, /?, --help  Show this help
 echo.
-echo Photos are sorted into YYMMDD subfolders by the date in the filename.
+echo Photos are sorted into YYMMDD subfolders.
+echo   - Dated names (2024.05.17_... / PXL_20240517...) are moved as-is.
+echo   - Undated names (raw ARW/CR2/NEF) are renamed from their EXIF
+echo     capture date (YYYY.MM.DDHH.MM.SS prefix), then moved.
+echo   - Needs exiftool for the undated case.
 goto end
 
 REM --- Run ---
