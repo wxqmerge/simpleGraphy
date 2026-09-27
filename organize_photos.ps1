@@ -11,10 +11,10 @@ foreach ($ext in $extensions) {
         if ($base -match '^\d{4}\.\d{2}\.\d{2}') {
             $dateRaw = $base.Substring(0, 10)
             $dateClean = $dateRaw -replace '\.', ''
-            $folder = $dateClean.Substring(2, 2) + $dateClean.Substring(4, 4)
+            $folder = $dateClean.Substring(2, 6)
         }
         elseif ($base -match '^PXL_\d{8}') {
-            $folder = $base.Substring(6, 2) + $base.Substring(8, 4)
+            $folder = $base.Substring(6, 6)
         }
 
         if (-not $folder) { continue }
@@ -36,7 +36,7 @@ foreach ($ext in $extensions) {
         $moved++
 
         foreach ($sidecar in @('caption', 'xmp')) {
-            $sidecarPath = Join-Path $f.DirectoryName "$base.$sidecar"
+            $sidecarPath = Join-Path $f.DirectoryName "$($f.Name).$sidecar"
             if (Test-Path $sidecarPath) {
                 Move-Item -Path $sidecarPath -Destination $folder -Force
             }
