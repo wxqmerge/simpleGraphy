@@ -13,10 +13,14 @@ REM  HOW TO RUN
 REM    Double-click this file             Organize the folder it lives in
 REM    organize_photos.bat                Organize the current folder
 REM    organize_photos.bat "C:\MyPhotos"  Organize a specific folder
+REM    organize_photos.bat "C:\x\IMG.jpg" Rename just that one file
+REM    Drag a FOLDER onto this file       Organize that folder
+REM    Drag a FILE onto this file         Rename just that file
 REM    organize_photos.bat -h             Show this help
 REM
 REM  OPTIONS
 REM    <folder>          Target directory (default: current directory)
+REM    <file>            A single photo to rename (EXIF date)
 REM    -h, -?, /?, --help   Show help
 REM
 REM  WHAT IT DOES
@@ -43,10 +47,11 @@ goto parse
 
 REM --- Show help ---
 :help
-echo Usage: organize_photos.bat [folder] [options]
+echo Usage: organize_photos.bat [folder-or-file] [options]
 echo.
 echo   (no args)            Organize the current folder
 echo   folder               Organize the given folder
+echo   file                 Rename just that one file (EXIF date)
 echo   -h, -?, /?, --help  Show this help
 echo.
 echo Photos are sorted into YYMMDD subfolders.
@@ -59,14 +64,16 @@ goto end
 REM --- Run ---
 :run
 if defined TARGET (
-    if not exist "%TARGET%\\" (
-        echo ERROR: Folder not found: %TARGET%
+    if exist "%TARGET%\" (
+        echo Organizing folder: %TARGET%
+        powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%organize_photos.ps1" -Target "%TARGET%"
+    ) else if exist "%TARGET%" (
+        echo Organizing file: %TARGET%
+        powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%organize_photos.ps1" -Target "%TARGET%"
+    ) else (
+        echo ERROR: Not found: %TARGET%
         goto end
     )
-    echo Organizing: %TARGET%
-    pushd "%TARGET%"
-    powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%organize_photos.ps1"
-    popd
 ) else (
     echo Organizing: %CD%
     powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%organize_photos.ps1"
