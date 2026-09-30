@@ -1,4 +1,9 @@
-# Organize photos in the current directory into per-date (YYMMDD) folders.
+# Organize photos into per-date (YYMMDD) folders.
+#
+# Usage:
+#   organize_photos.ps1                 -> organize the current directory
+#   organize_photos.ps1 -Target <dir>   -> organize that directory
+#   organize_photos.ps1 -Target <file>  -> rename just that one file
 #
 # Naming rules (checked in order):
 #   1. Name already starts with a date  -> YYYY.MM.DD...  or  PXL_YYYYMMDD...
@@ -17,6 +22,8 @@
 #   2. C:\Users\wxqme\bin\exiftool.exe
 #   3. anywhere on PATH
 # If not found, rule-2 files are simply skipped.
+
+param([string]$Target = "")
 
 $extensions = @('JPG','jpg','jpeg','JPEG','HEIC','heic','CR2','cr2','ARW','arw','NEF','nef','RAW','raw','DNG','dng','SRW','srw','ORF','orf','PEF','pef','SR2','sr2','SR3','sr3','RAF','raf')
 $moved = 0
@@ -46,60 +53,86 @@ function Get-ExifStamp {
     return $null
 }
 
-foreach ($ext in $extensions) {
-    $files = Get-ChildItem -Path "*.$ext" -File -ErrorAction SilentlyContinue
-    foreach ($f in $files) {
-        $base = $f.BaseName
-        $folder = $null
-        $newName = $f.Name
+# Apply the naming rules to one file and move (renaming if needed) it into its
+# YYMMDD folder, carrying sidecars. $f is a FileInfo.
+function Process-File {
+    param($f)
+    $base = $f.BaseName
+    $folderName = $null
+    $newName = $f.Name
 
-        if ($base -match '^\d{4}\.\d{2}\.\d{2}') {
-            $dateRaw = $base.Substring(0, 10)
-            $dateClean = $dateRaw -replace '\.', ''
-            $folder = $dateClean.Substring(2, 6)
-        }
-        elseif ($base -match '^PXL_\d{8}') {
-            $folder = $base.Substring(6, 6)
-        }
-        else {
-            $stamp = Get-ExifStamp $f.FullName
-            if ($stamp) {
-                $newName = $stamp + $base + $f.Extension
-                $datePart = $stamp.Substring(0, 10)
-                $folder = ($datePart -replace '\.', '').Substring(2, 6)
-            }
-        }
-
-        if (-not $folder) { continue }
-
-        if (-not (Test-Path $folder)) {
-            New-Item -ItemType Directory -Path $folder | Out-Null
-            Write-Host "Created: $folder"
-        }
-
-        $target = Join-Path $folder $newName
-        if (Test-Path $target) {
-            Write-Host "SKIP: $($f.Name)"
-            $skipped++
-            continue
-        }
-
-        Move-Item -Path $f.FullName -Destination $target -Force
-        if ($newName -ne $f.Name) {
-            Write-Host "Renamed+Moved: $($f.Name) -> $folder/$newName"
-            $renamed++
-        } else {
-            Write-Host "Moved: $($f.Name) -> $folder/"
-        }
-        $moved++
-
-        foreach ($sidecar in @('caption', 'xmp')) {
-            $sidecarPath = Join-Path $f.DirectoryName "$($f.Name).$sidecar"
-            if (Test-Path $sidecarPath) {
-                Move-Item -Path $sidecarPath -Destination (Join-Path $folder "$newName.$sidecar") -Force
-            }
+    if ($base -match '^\d{4}\.\d{2}\.\d{2}') {
+        $dateRaw = $base.Substring(0, 10)
+        $dateClean = $dateRaw -replace '\.', ''
+        $folderName = $dateClean.Substring(2, 6)
+    }
+    elseif ($base -match '^PXL_\d{8}') {
+        $folderName = $base.Substring(6, 6)
+    }
+    else {
+        $stamp = Get-ExifStamp $f.FullName
+        if ($stamp) {
+            $newName = $stamp + $base + $f.Extension
+            $datePart = $stamp.Substring(0, 10)
+            $folderName = ($datePart -replace '\.', '').Substring(2, 6)
         }
     }
+
+    if (-not $folderName) {
+        Write-Host "SKIP (no date): $($f.Name)"
+        $script:skipped++
+        return
+    }
+
+    $folder = Join-Path $f.DirectoryName $folderName
+    if (-not (Test-Path $folder)) {
+        New-Item -ItemType Directory -Path $folder | Out-Null
+        Write-Host "Created: $folder"
+    }
+
+    $target = Join-Path $folder $newName
+    if (Test-Path $target) {
+        Write-Host "SKIP (exists): $($f.Name)"
+        $script:skipped++
+        return
+    }
+
+    Move-Item -Path $f.FullName -Destination $target -Force
+    if ($newName -ne $f.Name) {
+        Write-Host "Renamed+Moved: $($f.Name) -> $folder/$newName"
+        $script:renamed++
+    } else {
+        Write-Host "Moved: $($f.Name) -> $folder/"
+    }
+    $script:moved++
+
+    foreach ($sidecar in @('caption', 'xmp')) {
+        $sidecarPath = Join-Path $f.DirectoryName "$($f.Name).$sidecar"
+        if (Test-Path $sidecarPath) {
+            Move-Item -Path $sidecarPath -Destination (Join-Path $folder "$newName.$sidecar") -Force
+        }
+    }
+}
+
+# Apply the naming rules to every photo in a directory.
+function Process-Directory {
+    param([string]$Dir)
+    foreach ($ext in $extensions) {
+        $files = Get-ChildItem -Path (Join-Path $Dir "*.$ext") -File -ErrorAction SilentlyContinue
+        foreach ($f in $files) {
+            Process-File $f
+        }
+    }
+}
+
+# --- main ---
+if ($Target -and (Test-Path -LiteralPath $Target -PathType Leaf)) {
+    Write-Host "Organizing single file: $Target"
+    Process-File (Get-Item -LiteralPath $Target)
+} else {
+    $dir = if ($Target) { $Target } else { (Get-Location).Path }
+    Write-Host "Organizing photos in: $dir"
+    Process-Directory $dir
 }
 
 Write-Host "Done. Moved: $moved | Renamed: $renamed | Skipped: $skipped"
