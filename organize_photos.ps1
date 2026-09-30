@@ -1,34 +1,33 @@
-# Organize photos into per-date (YYMMDD) folders.
+# Rename undated photos by their EXIF capture date, in place.
 #
 # Usage:
-#   organize_photos.ps1                 -> organize the current directory
-#   organize_photos.ps1 -Target <dir>   -> organize that directory
+#   organize_photos.ps1                 -> process the current directory (recursively)
+#   organize_photos.ps1 -Target <dir>   -> process that directory (recursively)
 #   organize_photos.ps1 -Target <file>  -> rename just that one file
 #
-# Naming rules (checked in order):
-#   1. Name already starts with a date  -> YYYY.MM.DD...  or  PXL_YYYYMMDD...
-#        -> moved as-is into the matching YYMMDD folder (no rename).
-#   2. Name has NO date (e.g. raw ARW/CR2/NEF like DSC02799.ARW)
-#        -> capture date read from EXIF (DateTimeOriginal) via exiftool,
-#           file renamed to  YYYY.MM.DDHH.MM.SS<original-name>.<ext>
-#           and moved into the matching YYMMDD folder.
-#   3. No date in name AND no EXIF date -> left alone.
+# Behavior:
+#   - Recurses into subfolders (e.g. pan* folders) to find photos.
+#   - A name that already starts with a date (YYYY.MM.DD... or PXL_YYYYMMDD...)
+#     is left as-is.
+#   - A name with NO date (e.g. raw ARW/CR2/NEF like DSC02799.ARW) is renamed,
+#     IN PLACE, to  YYYY.MM.DDHH.MM.SS<original-name>.<ext>  using the EXIF
+#     capture date (DateTimeOriginal) read via exiftool.
+#   - Files are NOT moved; each stays in the folder it is found in.
+#   - No date in name AND no EXIF date -> left alone.
 #
-# Sidecars (.caption / .xmp) named after the file are moved along and
-# renamed to match when the photo is renamed.
+# Sidecars (.caption / .xmp) named after the file are renamed to match.
 #
-# Requires exiftool for rule 2. Looked up in this order:
+# Requires exiftool for the no-date case. Looked up in this order:
 #   1. next to this script (exiftool.exe in the same folder)  <- portable
 #   2. C:\Users\wxqme\bin\exiftool.exe
 #   3. anywhere on PATH
-# If not found, rule-2 files are simply skipped.
+# If not found, no-date files are simply skipped.
 
 param([string]$Target = "")
 
-$extensions = @('JPG','jpg','jpeg','JPEG','HEIC','heic','CR2','cr2','ARW','arw','NEF','nef','RAW','raw','DNG','dng','SRW','srw','ORF','orf','PEF','pef','SR2','sr2','SR3','sr3','RAF','raf')
-$moved = 0
-$skipped = 0
+$extPattern = '\.(jpg|jpeg|heic|cr2|arw|nef|raw|dng|srw|orf|pef|sr2|sr3|raf)$'
 $renamed = 0
+$skipped = 0
 
 # Resolve exiftool once: next to this script, then a known install, then PATH.
 $script:exiftool = $null
@@ -53,86 +52,65 @@ function Get-ExifStamp {
     return $null
 }
 
-# Apply the naming rules to one file and move (renaming if needed) it into its
-# YYMMDD folder, carrying sidecars. $f is a FileInfo.
+# Rename one undated file in place using its EXIF capture date. Names that
+# already carry a date are left alone. $f is a FileInfo.
 function Process-File {
     param($f)
     $base = $f.BaseName
-    $folderName = $null
     $newName = $f.Name
 
-    if ($base -match '^\d{4}\.\d{2}\.\d{2}') {
-        $dateRaw = $base.Substring(0, 10)
-        $dateClean = $dateRaw -replace '\.', ''
-        $folderName = $dateClean.Substring(2, 6)
-    }
-    elseif ($base -match '^PXL_\d{8}') {
-        $folderName = $base.Substring(6, 6)
-    }
-    else {
-        $stamp = Get-ExifStamp $f.FullName
-        if ($stamp) {
-            $newName = $stamp + $base + $f.Extension
-            $datePart = $stamp.Substring(0, 10)
-            $folderName = ($datePart -replace '\.', '').Substring(2, 6)
-        }
+    # Already has a date in the name -> leave as-is.
+    if ($base -match '^\d{4}\.\d{2}\.\d{2}' -or $base -match '^PXL_\d{8}') {
+        return
     }
 
-    if (-not $folderName) {
+    # Undated -> rename in place using the EXIF capture date.
+    $stamp = Get-ExifStamp $f.FullName
+    if (-not $stamp) {
         Write-Host "SKIP (no date): $($f.Name)"
         $script:skipped++
         return
     }
 
-    $folder = Join-Path $f.DirectoryName $folderName
-    if (-not (Test-Path $folder)) {
-        New-Item -ItemType Directory -Path $folder | Out-Null
-        Write-Host "Created: $folder"
-    }
-
-    $target = Join-Path $folder $newName
+    $newName = $stamp + $base + $f.Extension
+    $target = Join-Path $f.DirectoryName $newName
     if (Test-Path $target) {
-        Write-Host "SKIP (exists): $($f.Name)"
+        Write-Host "SKIP (exists): $newName"
         $script:skipped++
         return
     }
 
-    Move-Item -Path $f.FullName -Destination $target -Force
-    if ($newName -ne $f.Name) {
-        Write-Host "Renamed+Moved: $($f.Name) -> $folder/$newName"
-        $script:renamed++
-    } else {
-        Write-Host "Moved: $($f.Name) -> $folder/"
-    }
-    $script:moved++
+    Rename-Item -LiteralPath $f.FullName -NewName $newName
+    Write-Host "Renamed: $($f.Name) -> $newName  (in $($f.DirectoryName))"
+    $script:renamed++
 
     foreach ($sidecar in @('caption', 'xmp')) {
         $sidecarPath = Join-Path $f.DirectoryName "$($f.Name).$sidecar"
         if (Test-Path $sidecarPath) {
-            Move-Item -Path $sidecarPath -Destination (Join-Path $folder "$newName.$sidecar") -Force
+            Rename-Item -LiteralPath $sidecarPath -NewName "$newName.$sidecar"
         }
     }
 }
 
-# Apply the naming rules to every photo in a directory.
+# Rename undated photos in a directory tree (recursively), in place.
 function Process-Directory {
     param([string]$Dir)
-    foreach ($ext in $extensions) {
-        $files = Get-ChildItem -Path (Join-Path $Dir "*.$ext") -File -ErrorAction SilentlyContinue
-        foreach ($f in $files) {
-            Process-File $f
-        }
+    $files = Get-ChildItem -Path $Dir -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+        $_.Name -match $extPattern
+    }
+    foreach ($f in $files) {
+        Process-File $f
     }
 }
 
 # --- main ---
 if ($Target -and (Test-Path -LiteralPath $Target -PathType Leaf)) {
-    Write-Host "Organizing single file: $Target"
+    Write-Host "Renaming single file: $Target"
     Process-File (Get-Item -LiteralPath $Target)
 } else {
     $dir = if ($Target) { $Target } else { (Get-Location).Path }
-    Write-Host "Organizing photos in: $dir"
+    Write-Host "Renaming undated photos in: $dir (recursively)"
     Process-Directory $dir
 }
 
-Write-Host "Done. Moved: $moved | Renamed: $renamed | Skipped: $skipped"
+Write-Host "Done. Renamed: $renamed | Skipped: $skipped"
