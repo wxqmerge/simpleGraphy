@@ -1,4 +1,6 @@
 # Move photos into per-date (YYMMDD) folders, at the top level of a folder.
+# Version: 1.1
+
 #
 # Usage:
 #   make_date_folders.ps1                 -> organize the current directory
@@ -19,7 +21,7 @@
 #
 # Requires exiftool for the no-date case. Looked up in this order:
 #   1. next to this script (exiftool.exe in the same folder)  <- portable
-#   2. C:\Users\wxqme\bin\exiftool.exe
+#   2. %USERPROFILE%\bin\exiftool.exe
 #   3. anywhere on PATH
 # If not found, no-date files are simply skipped.
 
@@ -30,11 +32,11 @@ $moved = 0
 $skipped = 0
 $renamed = 0
 
-# Resolve exiftool once: next to this script, then a known install, then PATH.
+# Resolve exiftool once: next to this script, then %USERPROFILE%\bin, then PATH.
 $script:exiftool = $null
 $candidates = @(
     (Join-Path $PSScriptRoot "exiftool.exe"),
-    "C:\Users\wxqme\bin\exiftool.exe"
+    (Join-Path $env:USERPROFILE "bin\exiftool.exe")
 )
 foreach ($c in $candidates) {
     if (Test-Path $c) { $script:exiftool = $c; break }
@@ -44,12 +46,30 @@ if (-not $script:exiftool) {
     if ($cmd) { $script:exiftool = $cmd.Source }
 }
 
+# Verify exiftool actually runs
+if ($script:exiftool) {
+    $ver = (cmd /c "`"$($script:exiftool)`" -ver" 2>$null) -join ' '
+    Write-Host "make_date_folders v1.1 | exiftool $ver ($($script:exiftool))"
+} else {
+    Write-Host "make_date_folders v1.1 | WARNING: exiftool not found - undated files will be skipped"
+}
+
 # Return the EXIF capture date as "YYYY.MM.DDHH.MM.SS", or $null if absent.
 function Get-ExifStamp {
     param([string]$Path)
     if (-not $script:exiftool) { return $null }
-    $out = & $script:exiftool -d '%Y.%m.%d%H.%M.%S' -DateTimeOriginal $Path 2>$null
-    if ($out -match '(\d{4}\.\d{2}\.\d{2}\d{2}\.\d{2}\.\d{2})') { return $Matches[1] }
+    $tags = @('DateTimeOriginal', 'CreateDate', 'DateTime', 'ModifyDate')
+    $pattern = '(\d{4}):(\d{2}):(\d{2})\s+(\d{2}):(\d{2}):(\d{2})'
+    foreach ($tag in $tags) {
+        $out = (cmd /c "`"$($script:exiftool)`" -$tag `"$Path`"" 2>$null) -join ' '
+        $m = [regex]::Match($out, $pattern)
+        if ($m.Success) {
+            $stamp = "$($m.Groups[1].Value).$($m.Groups[2].Value).$($m.Groups[3].Value)$($m.Groups[4].Value).$($m.Groups[5].Value).$($m.Groups[6].Value)"
+            if ($stamp -match '^\d{4}\.\d{2}\.\d{4}\.\d{2}\.\d{2}$') {
+                return $stamp
+            }
+        }
+    }
     return $null
 }
 
@@ -118,7 +138,7 @@ function Process-File {
 function Process-Directory {
     param([string]$Dir)
     foreach ($ext in $extensions) {
-        $files = Get-ChildItem -Path (Join-Path $Dir "*.$ext") -File -ErrorAction SilentlyContinue
+        $files = Get-ChildItem -Path (Join-Path $Dir "*.$ext") -ErrorAction SilentlyContinue | Where-Object { -not $_.PSIsContainer }
         foreach ($f in $files) {
             Process-File $f
         }

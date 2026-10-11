@@ -1,6 +1,10 @@
 @echo off
 setlocal
+set "BIN_DIR=%USERPROFILE%\bin"
 set "SCRIPT_DIR=%~dp0"
+REM Find the .ps1: prefer %USERPROFILE%\bin, fall back to next to this .bat
+set "PS1=%BIN_DIR%\make_date_folders.ps1"
+if not exist "%PS1%" set "PS1=%SCRIPT_DIR%make_date_folders.ps1"
 
 REM ============================================================
 REM  make_date_folders.bat
@@ -67,17 +71,17 @@ REM --- Run ---
 if defined TARGET (
     if exist "%TARGET%\" (
         echo Organizing folder: %TARGET%
-        powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%make_date_folders.ps1" -Target "%TARGET%"
+        powershell -ExecutionPolicy Bypass -File "%PS1%" -Target "%TARGET%"
     ) else if exist "%TARGET%" (
         echo Organizing file: %TARGET%
-        powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%make_date_folders.ps1" -Target "%TARGET%"
+        powershell -ExecutionPolicy Bypass -File "%PS1%" -Target "%TARGET%"
     ) else (
         echo ERROR: Not found: %TARGET%
         goto end
     )
 ) else (
     echo Organizing: %CD%
-    powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%make_date_folders.ps1"
+    powershell -ExecutionPolicy Bypass -File "%PS1%"
 )
 
 :end
