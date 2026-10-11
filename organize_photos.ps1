@@ -1,4 +1,6 @@
 # Rename undated photos by their EXIF capture date, in place.
+# Version: 1.1
+
 #
 # Usage:
 #   organize_photos.ps1                 -> process the current directory (recursively)
@@ -19,7 +21,7 @@
 #
 # Requires exiftool for the no-date case. Looked up in this order:
 #   1. next to this script (exiftool.exe in the same folder)  <- portable
-#   2. C:\Users\user\bin\exiftool.exe
+#   2. %USERPROFILE%\bin\exiftool.exe
 #   3. anywhere on PATH
 # If not found, no-date files are simply skipped.
 
@@ -29,11 +31,11 @@ $extPattern = '\.(jpg|jpeg|heic|cr2|arw|nef|raw|dng|srw|orf|pef|sr2|sr3|raf)$'
 $renamed = 0
 $skipped = 0
 
-# Resolve exiftool once: next to this script, then a known install, then PATH.
+# Resolve exiftool once: next to this script, then %USERPROFILE%\bin, then PATH.
 $script:exiftool = $null
 $candidates = @(
     (Join-Path $PSScriptRoot "exiftool.exe"),
-    "C:\Users\user\bin\exiftool.exe"
+    (Join-Path $env:USERPROFILE "bin\exiftool.exe")
 )
 foreach ($c in $candidates) {
     if (Test-Path $c) { $script:exiftool = $c; break }
@@ -43,12 +45,30 @@ if (-not $script:exiftool) {
     if ($cmd) { $script:exiftool = $cmd.Source }
 }
 
+# Verify exiftool actually runs
+if ($script:exiftool) {
+    $ver = (cmd /c "`"$($script:exiftool)`" -ver" 2>$null) -join ' '
+    Write-Host "organize_photos v1.1 | exiftool $ver ($($script:exiftool))"
+} else {
+    Write-Host "organize_photos v1.1 | WARNING: exiftool not found - undated files will be skipped"
+}
+
 # Return the EXIF capture date as "YYYY.MM.DDHH.MM.SS", or $null if absent.
 function Get-ExifStamp {
     param([string]$Path)
     if (-not $script:exiftool) { return $null }
-    $out = & $script:exiftool -d '%Y.%m.%d%H.%M.%S' -DateTimeOriginal $Path 2>$null
-    if ($out -match '(\d{4}\.\d{2}\.\d{2}\d{2}\.\d{2}\.\d{2})') { return $Matches[1] }
+    $tags = @('DateTimeOriginal', 'CreateDate', 'DateTime', 'ModifyDate')
+    $pattern = '(\d{4}):(\d{2}):(\d{2})\s+(\d{2}):(\d{2}):(\d{2})'
+    foreach ($tag in $tags) {
+        $out = (cmd /c "`"$($script:exiftool)`" -$tag `"$Path`"" 2>$null) -join ' '
+        $m = [regex]::Match($out, $pattern)
+        if ($m.Success) {
+            $stamp = "$($m.Groups[1].Value).$($m.Groups[2].Value).$($m.Groups[3].Value)$($m.Groups[4].Value).$($m.Groups[5].Value).$($m.Groups[6].Value)"
+            if ($stamp -match '^\d{4}\.\d{2}\.\d{4}\.\d{2}\.\d{2}$') {
+                return $stamp
+            }
+        }
+    }
     return $null
 }
 
@@ -95,8 +115,8 @@ function Process-File {
 # Rename undated photos in a directory tree (recursively), in place.
 function Process-Directory {
     param([string]$Dir)
-    $files = Get-ChildItem -Path $Dir -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -match $extPattern
+    $files = Get-ChildItem -Path $Dir -Recurse -ErrorAction SilentlyContinue | Where-Object {
+        -not $_.PSIsContainer -and $_.Name -match $extPattern
     }
     foreach ($f in $files) {
         Process-File $f

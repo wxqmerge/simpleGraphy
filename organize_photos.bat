@@ -1,6 +1,10 @@
 @echo off
 setlocal
+set "BIN_DIR=%USERPROFILE%\bin"
 set "SCRIPT_DIR=%~dp0"
+REM Find the .ps1: prefer %USERPROFILE%\bin, fall back to next to this .bat
+set "PS1=%BIN_DIR%\organize_photos.ps1"
+if not exist "%PS1%" set "PS1=%SCRIPT_DIR%organize_photos.ps1"
 
 REM ============================================================
 REM  organize_photos.bat
@@ -66,17 +70,17 @@ REM --- Run ---
 if defined TARGET (
     if exist "%TARGET%\" (
         echo Renaming photos in: %TARGET%
-        powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%organize_photos.ps1" -Target "%TARGET%"
+        powershell -ExecutionPolicy Bypass -File "%PS1%" -Target "%TARGET%"
     ) else if exist "%TARGET%" (
         echo Renaming file: %TARGET%
-        powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%organize_photos.ps1" -Target "%TARGET%"
+        powershell -ExecutionPolicy Bypass -File "%PS1%" -Target "%TARGET%"
     ) else (
         echo ERROR: Not found: %TARGET%
         goto end
     )
 ) else (
     echo Renaming photos in: %CD%
-    powershell -ExecutionPolicy Bypass -File "%SCRIPT_DIR%organize_photos.ps1"
+    powershell -ExecutionPolicy Bypass -File "%PS1%"
 )
 
 :end
