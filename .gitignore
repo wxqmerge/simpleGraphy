@@ -219,3 +219,9 @@ __marimo__/
 
 # Panorama detection test data
 _pan_test/
+
+# stray test photos in repo root
+/*.ARW
+/*.arw
+/*.JPG
+/*.jpg

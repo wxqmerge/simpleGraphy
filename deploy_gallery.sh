@@ -1,9 +1,9 @@
 #!/bin/bash
 # deploy_gallery.sh
 #
-# Serve the simpleGraphy photo gallery over HTTPS on a example.com subdomain,
-# using the same nginx + Let's Encrypt (certbot) approach as D:\legacyproj
-# (see D:\legacyproj\deploy\update.sh steps 9-11 and D:\legacyproj\deploy\legacyproj.conf).
+# Serve the simpleGraphy photo gallery over HTTPS on a subdomain of your
+# own domain, using nginx + Let's Encrypt (certbot). Set DOMAIN via env
+# var or the defaults below.
 #
 # The gallery is a static site (index.html + .thumbs/ + .lr/ + subdirs) and is
 # NOT in git (galleries/ is gitignored), so transfer it to the server first:
@@ -17,7 +17,7 @@
 #
 # Prerequisites on the server:
 #   - nginx + certbot installed (sudo apt install nginx certbot rsync)
-#   - DNS A/AAAA record for <SUBDOMAIN>.example.com -> this server's IP
+#   - DNS A/AAAA record for <SUBDOMAIN>.<your-domain> -> this server's IP
 #   - ports 80 and 443 open
 #
 # Usage:
@@ -107,7 +107,7 @@ else
   else
     rsync -a --delete "$SRC_DIR/" "$WEB_ROOT/"
   fi
-  # Fix ownership and permissions (same as legacyproj): deploy user owns, www-data group reads
+  # Fix ownership and permissions (standard shared deploy): deploy user owns, www-data group reads
   srun chown -R "${DEPLOY_USER}:${SHARED_GROUP}" "$WEB_ROOT"
   find "$WEB_ROOT" -type d -exec chmod 755 {} +
   find "$WEB_ROOT" -type f -exec chmod 644 {} +
@@ -183,7 +183,7 @@ NGINX
 fi
 echo "  Done."
 
-# 3. Get/renew SSL certificate (certbot --standalone, same as legacyproj)
+# 3. Get/renew SSL certificate (certbot --standalone)
 echo "[3/4] Getting SSL certificate for $FULL_DOMAIN ..."
 if [ "$DRY_RUN" = 1 ]; then
   echo "  [dry-run] sudo certbot certonly --standalone -d $FULL_DOMAIN --non-interactive --agree-tos --email $CERT_EMAIL --key-type ecdsa"
@@ -192,7 +192,7 @@ else
     echo "ERROR: certbot not installed. Install it: sudo apt install certbot"
     exit 1
   fi
-  # --standalone binds port 80 directly, so nginx must be stopped first (same as legacyproj).
+  # --standalone binds port 80 directly, so nginx must be stopped first.
   # If you'd rather not interrupt other sites, use --webroot -w $CERTBOT_WELLKNOWN instead.
   srun systemctl stop nginx
   if sudo certbot certonly --standalone -d "$FULL_DOMAIN" --non-interactive --agree-tos --email "$CERT_EMAIL" --key-type ecdsa; then

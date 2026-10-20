@@ -3100,7 +3100,7 @@ def walk_and_generate(root_path, output_root, thumb_size, force, random_depth=No
 def fix_permissions(*paths):
     """Set web-safe permissions on the gallery tree (dirs 755, files 644).
 
-    Mirrors the legacyproj deploy: nginx (www-data) needs read access to serve
+    Mirrors a standard nginx shared deploy: nginx (www-data) needs read access to serve
     files and traverse directories. World-read is sufficient, so no chown is
     required. Only applies on POSIX; a no-op on Windows.
     """
