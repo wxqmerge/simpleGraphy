@@ -1,13 +1,14 @@
-# Builds install.exe from installer\install.cs using Windows PowerShell 5.1's
-# built-in .NET Framework compiler, so the result runs on any Windows without
-# the .NET SDK. The repo root is baked into the exe as a fallback source path.
+# Builds install.exe from install.cs (next to this script) using Windows
+# PowerShell 5.1's built-in .NET Framework compiler, so the result runs on any
+# Windows without the .NET SDK. This folder is baked into the exe as a
+# fallback source path.
 param([string]$OutFile)
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 if (-not $OutFile) { $OutFile = Join-Path $root 'install.exe' }
 
-$cs = Get-Content -Raw -LiteralPath (Join-Path $root 'installer\install.cs')
+$cs = Get-Content -Raw -LiteralPath (Join-Path $root 'install.cs')
 $cs = $cs.Replace('__SRC_ROOT__', $root)
 
 $tmpCs = Join-Path $env:TEMP 'simpleGraphy_install_src.cs'

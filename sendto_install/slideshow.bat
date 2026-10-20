@@ -2,9 +2,10 @@
 setlocal
 set "BIN_DIR=%USERPROFILE%\bin"
 set "SCRIPT_DIR=%~dp0"
-REM Find slideshow.exe: prefer %USERPROFILE%\bin\slideshow, fall back to repo dist next to this .bat
+REM Find slideshow.exe: %USERPROFILE%\bin\slideshow, then repo dist (next to or above this .bat)
 set "EXE=%BIN_DIR%\slideshow\slideshow.exe"
 if not exist "%EXE%" set "EXE=%SCRIPT_DIR%slideshow\dist\slideshow.exe"
+if not exist "%EXE%" set "EXE=%SCRIPT_DIR%..\slideshow\dist\slideshow.exe"
 
 REM ============================================================
 REM  slideshow.bat
@@ -73,7 +74,8 @@ if not exist "%EXE%" (
     echo ERROR: slideshow.exe not found.
     echo   Looked in: %BIN_DIR%\slideshow
     echo              %SCRIPT_DIR%slideshow\dist
-    echo Run install.exe from the simpleGraphy folder first.
+    echo              %SCRIPT_DIR%..\slideshow\dist
+    echo Run sendto_install\install.exe first, or build the app.
     goto end
 )
 

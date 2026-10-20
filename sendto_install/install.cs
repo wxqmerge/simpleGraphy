@@ -16,8 +16,8 @@ class Installer
         }
         if (!File.Exists(Path.Combine(src, "rename_dates.bat")))
         {
-            Console.WriteLine("ERROR: Could not find the simpleGraphy apps folder.");
-            Console.WriteLine("Run install.exe from inside the simpleGraphy folder.");
+            Console.WriteLine("ERROR: Could not find the SendTo apps folder.");
+            Console.WriteLine("Run install.exe from inside the sendto_install folder.");
             if (!quiet) Console.ReadKey();
             return 1;
         }
@@ -75,10 +75,11 @@ class Installer
         foreach (string d in dists)
         {
             string sdir = Path.Combine(src, d, "dist");
+            if (!Directory.Exists(sdir)) sdir = Path.Combine(src, "..", d, "dist");
             string tdir = Path.Combine(bin, d);
             if (!Directory.Exists(sdir))
             {
-                Console.WriteLine("MISS " + sdir + "   (build it first: dotnet publish)");
+                Console.WriteLine("MISS " + Path.GetFullPath(sdir) + "   (build it first: dotnet publish)");
                 fail++;
                 continue;
             }

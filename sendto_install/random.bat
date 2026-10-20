@@ -2,9 +2,10 @@
 setlocal
 set "BIN_DIR=%USERPROFILE%\bin"
 set "SCRIPT_DIR=%~dp0"
-REM Find random.exe: prefer %USERPROFILE%\bin\random, fall back to repo dist next to this .bat
+REM Find random.exe: %USERPROFILE%\bin\random, then repo dist (next to or above this .bat)
 set "EXE=%BIN_DIR%\random\random.exe"
 if not exist "%EXE%" set "EXE=%SCRIPT_DIR%random\dist\random.exe"
+if not exist "%EXE%" set "EXE=%SCRIPT_DIR%..\random\dist\random.exe"
 
 REM ============================================================
 REM  random.bat
@@ -73,7 +74,8 @@ if not exist "%EXE%" (
     echo ERROR: random.exe not found.
     echo   Looked in: %BIN_DIR%\random
     echo              %SCRIPT_DIR%random\dist
-    echo Run install.exe from the simpleGraphy folder first.
+    echo              %SCRIPT_DIR%..\random\dist
+    echo Run sendto_install\install.exe first, or build the app.
     goto end
 )
 
