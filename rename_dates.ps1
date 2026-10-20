@@ -3,9 +3,9 @@
 
 #
 # Usage:
-#   organize_photos.ps1                 -> process the current directory (recursively)
-#   organize_photos.ps1 -Target <dir>   -> process that directory (recursively)
-#   organize_photos.ps1 -Target <file>  -> rename just that one file
+#   rename_dates.ps1                 -> process the current directory (recursively)
+#   rename_dates.ps1 -Target <dir>   -> process that directory (recursively)
+#   rename_dates.ps1 -Target <file>  -> rename just that one file
 #
 # Behavior:
 #   - Recurses into subfolders (e.g. pan* folders) to find photos.
@@ -48,9 +48,9 @@ if (-not $script:exiftool) {
 # Verify exiftool actually runs
 if ($script:exiftool) {
     $ver = (cmd /c "`"$($script:exiftool)`" -ver" 2>$null) -join ' '
-    Write-Host "organize_photos v1.1 | exiftool $ver ($($script:exiftool))"
+    Write-Host "rename_dates v1.1 | exiftool $ver ($($script:exiftool))"
 } else {
-    Write-Host "organize_photos v1.1 | WARNING: exiftool not found - undated files will be skipped"
+    Write-Host "rename_dates v1.1 | WARNING: exiftool not found - undated files will be skipped"
 }
 
 # Return the EXIF capture date as "YYYY.MM.DDHH.MM.SS", or $null if absent.

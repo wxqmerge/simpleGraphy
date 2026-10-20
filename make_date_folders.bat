@@ -36,7 +36,7 @@ REM    - Moves each photo into a YYMMDD folder (e.g. 250517)
 REM    - Only the top level is scanned; subfolders are ignored
 REM    - Also moves .caption / .xmp sidecar files along (renamed to match)
 REM    - Skips a file if the target already exists (no overwrite)
-REM    - Needs exiftool for the no-date case (C:\Users\user\bin\exiftool.exe)
+REM    - Needs exiftool for the no-date case (%USERPROFILE%\bin\exiftool.exe)
 REM ============================================================
 
 REM --- Parse arguments ---

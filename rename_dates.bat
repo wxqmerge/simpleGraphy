@@ -3,11 +3,11 @@ setlocal
 set "BIN_DIR=%USERPROFILE%\bin"
 set "SCRIPT_DIR=%~dp0"
 REM Find the .ps1: prefer %USERPROFILE%\bin, fall back to next to this .bat
-set "PS1=%BIN_DIR%\organize_photos.ps1"
-if not exist "%PS1%" set "PS1=%SCRIPT_DIR%organize_photos.ps1"
+set "PS1=%BIN_DIR%\rename_dates.ps1"
+if not exist "%PS1%" set "PS1=%SCRIPT_DIR%rename_dates.ps1"
 
 REM ============================================================
-REM  organize_photos.bat
+REM  rename_dates.bat
 REM
 REM  Renames undated photos by their EXIF capture date, in place.
 REM  Recurses into subfolders (e.g. pan* folders) to find photos.
@@ -15,12 +15,12 @@ REM  Files are NOT moved; each stays in the folder it is found in.
 REM
 REM  HOW TO RUN
 REM    Double-click this file             Process the folder it lives in
-REM    organize_photos.bat                Process the current folder
-REM    organize_photos.bat "C:\MyPhotos"  Process a specific folder
-REM    organize_photos.bat "C:\x\IMG.jpg" Rename just that one file
+REM    rename_dates.bat                Process the current folder
+REM    rename_dates.bat "C:\MyPhotos"  Process a specific folder
+REM    rename_dates.bat "C:\x\IMG.jpg" Rename just that one file
 REM    Drag a FOLDER onto this file       Process that folder (recursively)
 REM    Drag a FILE onto this file         Rename just that file
-REM    organize_photos.bat -h             Show this help
+REM    rename_dates.bat -h             Show this help
 REM
 REM  OPTIONS
 REM    <folder>          Target directory (default: current directory)
@@ -35,7 +35,7 @@ REM      YYYY.MM.DDHH.MM.SS<name> from the EXIF capture date
 REM    - Files are NOT moved; they stay in the folder they are found in
 REM    - Also renames .caption / .xmp sidecar files to match
 REM    - Skips a file if the new name already exists (no overwrite)
-REM    - Needs exiftool for the no-date case (C:\Users\user\bin\exiftool.exe)
+REM    - Needs exiftool for the no-date case (%USERPROFILE%\bin\exiftool.exe)
 REM ============================================================
 
 REM --- Parse arguments ---
@@ -52,7 +52,7 @@ goto parse
 
 REM --- Show help ---
 :help
-echo Usage: organize_photos.bat [folder-or-file] [options]
+echo Usage: rename_dates.bat [folder-or-file] [options]
 echo.
 echo   (no args)            Process the current folder (recursively)
 echo   folder               Process the given folder (recursively)
