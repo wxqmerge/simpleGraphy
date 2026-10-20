@@ -62,7 +62,7 @@ echo   folder               Slideshow the given folder
 echo   folder seconds       Slideshow with a slide interval in seconds
 echo   -h, -?, /?, --help  Show this help
 echo.
-echo Randomized photo slideshow (C:\Users\...\bin\random\random.exe).
+echo Randomized photo slideshow (%USERPROFILE%\bin\random\random.exe).
 echo Drop a folder (or a file, to use its folder) onto this .bat, or
 echo right-click a folder and Send to random.bat.
 goto end

@@ -62,7 +62,7 @@ echo   folder               Slideshow the given folder
 echo   folder seconds       Slideshow with a slide interval in seconds
 echo   -h, -?, /?, --help  Show this help
 echo.
-echo Sequential photo slideshow (C:\Users\...\bin\slideshow\slideshow.exe).
+echo Sequential photo slideshow (%USERPROFILE%\bin\slideshow\slideshow.exe).
 echo Drop a folder (or a file, to use its folder) onto this .bat, or
 echo right-click a folder and Send to slideshow.bat.
 goto end
