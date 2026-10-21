@@ -47,7 +47,7 @@ if (-not $script:exiftool) {
 
 # Verify exiftool actually runs
 if ($script:exiftool) {
-    $ver = (cmd /c "`"$($script:exiftool)`" -ver" 2>$null) -join ' '
+    $ver = (& $script:exiftool -ver 2>$null) -join ' '
     Write-Host "rename_dates v1.1 | exiftool $ver ($($script:exiftool))"
 } else {
     Write-Host "rename_dates v1.1 | WARNING: exiftool not found - undated files will be skipped"
@@ -60,7 +60,7 @@ function Get-ExifStamp {
     $tags = @('DateTimeOriginal', 'CreateDate', 'DateTime', 'ModifyDate')
     $pattern = '(\d{4}):(\d{2}):(\d{2})\s+(\d{2}):(\d{2}):(\d{2})'
     foreach ($tag in $tags) {
-        $out = (cmd /c "`"$($script:exiftool)`" -$tag `"$Path`"" 2>$null) -join ' '
+        $out = (& $script:exiftool "-$tag" $Path 2>$null) -join ' '
         $m = [regex]::Match($out, $pattern)
         if ($m.Success) {
             $stamp = "$($m.Groups[1].Value).$($m.Groups[2].Value).$($m.Groups[3].Value)$($m.Groups[4].Value).$($m.Groups[5].Value).$($m.Groups[6].Value)"

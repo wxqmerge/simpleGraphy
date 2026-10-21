@@ -2279,7 +2279,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 }};
                 
                 // Show hint for full-res click
-                lightboxFilename.innerHTML = `${{imageData.filename || ''}} <span style="color:#4fc3f7;font-size:0.85em;margin-left:8px">(click image for original)</span>`;
+                lightboxFilename.innerHTML = `${{escapeHtml(imageData.filename || '')}} <span style="color:#4fc3f7;font-size:0.85em;margin-left:8px">(click image for original)</span>`;
             }} else {{
                 lightboxImg.style.cursor = 'default';
                 lightboxImg.onclick = null;
@@ -2620,7 +2620,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 const hasFullRes = imageData.fullRes && imageData.fullRes !== imageData.full;
                 if (hasFullRes) {{
                     lightboxImg.style.cursor = 'pointer';
-                    lightboxFilename.innerHTML = `${{imageData.filename || ''}} <span style="color:#4fc3f7;font-size:0.85em;margin-left:8px">(click image for original)</span>`;
+                    lightboxFilename.innerHTML = `${{escapeHtml(imageData.filename || '')}} <span style="color:#4fc3f7;font-size:0.85em;margin-left:8px">(click image for original)</span>`;
                     lightboxImg.onclick = function(e) {{
                         e.stopPropagation();
                         const a = document.createElement('a');
@@ -2651,7 +2651,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 const hasFullRes = imageData.fullRes && imageData.fullRes !== imageData.full;
                 if (hasFullRes) {{
                     lightboxImg.style.cursor = 'pointer';
-                    lightboxFilename.innerHTML = `${{imageData.filename || ''}} <span style="color:#4fc3f7;font-size:0.85em;margin-left:8px">(click image for original)</span>`;
+                    lightboxFilename.innerHTML = `${{escapeHtml(imageData.filename || '')}} <span style="color:#4fc3f7;font-size:0.85em;margin-left:8px">(click image for original)</span>`;
                     lightboxImg.onclick = function(e) {{
                         e.stopPropagation();
                         const a = document.createElement('a');
