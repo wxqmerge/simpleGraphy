@@ -28,7 +28,6 @@ from io import StringIO
 from pathlib import Path
 from datetime import datetime
 from PIL import Image, ExifTags
-import numpy as np
 
 # Increase max image pixels to handle panoramas
 Image.MAX_IMAGE_PIXELS = 500_000_000
@@ -47,8 +46,9 @@ except ImportError:
     except ImportError:
         HEIF_SUPPORT = False
 
-# Register dlib face detection if available
+# Register dlib face detection if available (numpy needed only for this)
 try:
+    import numpy as np
     import dlib
     _mp_fd = dlib.get_frontal_face_detector()
     FACE_DETECTION = True
