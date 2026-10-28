@@ -15,7 +15,7 @@ caption_remaining.py  -->  llama-server (localhost:8080)  -->  GPU (32GB VRAM)
 
 1. **Image Selection** — `caption_remaining.py` scans an album directory for `.jpg`/`.jpeg` files without a `.caption` file. HEIC files are skipped (requires ffprobe in PATH).
 
-2. **LR Preference** — Checks `.lr/IMG_XXXX_LR.jpg` first. LR images are ~400 KB vs ~14 KB full res, producing far fewer embedding tokens.
+2. **LR Preference** — Checks `.lr/IMG_XXXX_jpg_LR.jpg` first (collision-safe naming shared with `generate_gallery.py`). LR images are ~400 KB vs ~14 MB full res, producing far fewer embedding tokens.
 
 3. **API Request** — Sends image as base64 to local `llama-server` via OpenAI-compatible chat API:
    - `max_tokens: 512` — model generates internal reasoning (~1400 chars) before the actual caption. `128` was too low and caused empty responses.
@@ -26,7 +26,7 @@ caption_remaining.py  -->  llama-server (localhost:8080)  -->  GPU (32GB VRAM)
 
 5. **KV Cache Management** — Server runs with `--ctx-size 65536`. Each image consumes ~1k–50k tokens in the KV cache. Sequential processing (1 at a time) prevents cache exhaustion on 32GB VRAM.
 
-6. **Persistence** — Caption written to `image.jpg.caption` alongside the image. Checkpoint file (`.caption_progress`) tracks progress for resume on interruption.
+6. **Persistence** — Caption written to `image.jpg.caption` alongside the image. The `.caption` sidecars are themselves the resume state: re-running the script skips images that already have one.
 
 7. **Gallery Integration** — `generate_gallery.py` reads `.caption` files and renders them in thumbnail overlays and lightbox via CSS class `.caption`.
 

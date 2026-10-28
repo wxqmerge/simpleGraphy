@@ -1062,6 +1062,20 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     if not has_gallery_content(directory):
         return False
     
+    # Guardrail: HEIC/HEIF is Apple's container of a public standard, but most
+    # browsers cannot decode it - warn loudly when raw HEIC leaks into a gallery.
+    heics = [p for p in images if Path(p).suffix.lower() in ('.heic', '.heif')]
+    if heics:
+        print(f"  [WARN] {os.path.relpath(directory, root_path) or 'root'}: "
+              f"{len(heics)} HEIC/HEIF file(s) - browsers cannot display these; "
+              f"convert with heic2jpeg.sh and delete the source")
+        for p in heics[:5]:
+            stem = str(Path(p).with_suffix(''))
+            dup = ' (duplicate of same-named .jpg)' if any(os.path.isfile(stem + e) for e in ('.jpg', '.jpeg')) else ''
+            print(f"         {os.path.basename(p)}{dup}")
+        if len(heics) > 5:
+            print(f"         ... and {len(heics) - 5} more")
+    
     dir_name = os.path.basename(directory.rstrip('/')) or 'Gallery'
     rel_path = os.path.relpath(directory, root_path).replace('\\', '/')
     gallery_root = html.escape(os.path.basename(os.path.dirname(root_path.rstrip('/'))) or 'Root')
