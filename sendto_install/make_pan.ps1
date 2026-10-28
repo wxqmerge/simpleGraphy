@@ -57,14 +57,24 @@ else {
         $existing[$d.Name.ToLowerInvariant()] = $true
     }
     $r = Get-Random -Minimum 10000 -Maximum 100000
-    while ($existing.ContainsKey(("pan_$r").ToLowerInvariant())) { $r++ }
+    while ($existing.ContainsKey(("pan_$r").ToLowerInvariant())) {
+        # stay inside the 5-digit range
+        if ($r -ge 99999) { $r = 10000 } else { $r++ }
+    }
     $destName = "pan_$r"
     Write-Host "First file: $($first.Name)  (no DSC number)  ->  $destName"
 }
 
 $dest = Join-Path $base $destName
 if (-not (Test-Path -LiteralPath $dest -PathType Container)) {
-    New-Item -ItemType Directory -Path $dest | Out-Null
+    try {
+        # fails terminably if $dest exists as a file
+        New-Item -ItemType Directory -Path $dest -ErrorAction Stop | Out-Null
+    }
+    catch {
+        Write-Error "Cannot create folder: $dest"
+        exit 1
+    }
     Write-Host "Created: $dest"
 }
 else {

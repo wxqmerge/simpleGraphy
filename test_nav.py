@@ -10,25 +10,14 @@ import html
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from generate_gallery import get_sibling_nav, EXCLUDED_DIRS
+from generate_gallery import get_sibling_nav, EXCLUDED_DIRS, collect_dirs_with_images, build_breadcrumbs
 
 
 # ============================================================
-# Breadcrumb generation (same logic as generate_gallery.py)
+# Breadcrumbs come from generate_gallery.build_breadcrumbs itself,
+# so this test exercises the real production code path.
 # ============================================================
-def compute_breadcrumbs(directory, root_path):
-    rel_path = os.path.relpath(directory, root_path).replace('\\', '/')
-    if rel_path == '.':
-        return [{'name': 'Root', 'link': './'}]
-    parts = [p for p in rel_path.split('/') if p]
-    current_depth = len(parts)
-    breadcrumbs = [{'name': 'Root', 'link': '../' * current_depth}]
-    for i, part in enumerate(parts):
-        breadcrumbs.append({
-            'name': html.escape(part),
-            'link': '../' * (current_depth - i - 1)
-        })
-    return breadcrumbs
+compute_breadcrumbs = build_breadcrumbs
 
 
 # ============================================================
@@ -103,8 +92,8 @@ for item in bc_2:
     print(f'    {item["name"]}: href="{item["link"]}" -> resolves to "{os.path.basename(resolved)}"')
 
 # Check depth-1 breadcrumbs (galleries/26/)
-check('  Depth-1 Root link', bc_2[0]['link'], '../')
-check('  Depth-1 26/ link', bc_2[1]['link'], '')
+check('  Depth-1 Root link', bc_2[0]['link'], '../index.html')
+check('  Depth-1 26/ link', bc_2[1]['link'], 'index.html')
 
 
 # Depth-2: galleries/26/260330_France_Trip/
@@ -117,9 +106,9 @@ for item in bc_3:
     resolved = resolve(page_base_3, item['link'])
     print(f'    {item["name"]}: href="{item["link"]}" -> resolves to "{resolved}"')
 
-check('  Depth-2 Root link', bc_3[0]['link'], '../../')
-check('  Depth-2 26/ link', bc_3[1]['link'], '../')
-check('  Depth-2 France_Trip link', bc_3[2]['link'], '')
+check('  Depth-2 Root link', bc_3[0]['link'], '../../index.html')
+check('  Depth-2 26/ link', bc_3[1]['link'], '../index.html')
+check('  Depth-2 France_Trip link', bc_3[2]['link'], 'index.html')
 
 
 # Depth-3: galleries/26/260330_France_Trip/260318_iceland/
@@ -132,9 +121,9 @@ for item in bc_4:
     resolved = resolve(page_base_4, item['link'])
     print(f'    {item["name"]}: href="{item["link"]}" -> resolves to "{resolved}"')
 
-check('  Depth-3 Root link', bc_4[0]['link'], '../../../')
-check('  Depth-3 26/ link', bc_4[1]['link'], '../../')
-check('  Depth-3 France_Trip link', bc_4[2]['link'], '../')
+check('  Depth-3 Root link', bc_4[0]['link'], '../../../index.html')
+check('  Depth-3 26/ link', bc_4[1]['link'], '../../index.html')
+check('  Depth-3 France_Trip link', bc_4[2]['link'], '../index.html')
 
 
 # ============================================================
@@ -142,52 +131,32 @@ check('  Depth-3 France_Trip link', bc_4[2]['link'], '../')
 # ============================================================
 print(f'\n{YELLOW}=== TEST 2: Prev/Next Arrow Navigation ==={RESET}')
 
-def test_arrows(dir_name, expected_prev, expected_next):
-    """Test prev/next for a given directory."""
-    full_dir = os.path.join(GALLERIES_ROOT, dir_name)
-    if not os.path.isdir(full_dir):
-        print(f'  {YELLOW}SKIPPED{RESET} {dir_name}/ (directory not found)')
-        return
-    
-    global all_dirs
-    prev, next_ = get_sibling_nav(full_dir, all_dirs, GALLERIES_ROOT)
-    
-    print(f'\n  {dir_name}/')
-    print(f'    Prev: "{prev}"')
-    print(f'    Next: "{next_}"')
-    
-    check(f'  {dir_name}/ prev', prev, expected_prev)
-    check(f'  {dir_name}/ next', next_, expected_next)
 
+# Build the directory set exactly like production does (walk_and_generate):
+# every dir with images or image-bearing descendants gets an index.html, and
+# get_sibling_nav must only ever link to those dirs.
+all_dirs = collect_dirs_with_images(GALLERIES_ROOT)
 
-# We need to build the sibling list from actual filesystem
-all_dirs = []
-def scan_all(p):
-    try:
-        for d in os.listdir(p):
-            if d in EXCLUDED_DIRS or d.startswith('.'):
-                continue
-            full = os.path.join(p, d)
-            if os.path.isdir(full):
-                all_dirs.append(full)
-                scan_all(full)
-    except (PermissionError, OSError):
-        pass
+tested = 0
+for d in sorted(all_dirs):
+    rel_name = os.path.relpath(d, GALLERIES_ROOT).replace('\\', '/')
+    if rel_name == '.':
+        continue  # root: no sibling nav by design
+    prev, next_ = get_sibling_nav(d, all_dirs, GALLERIES_ROOT)
+    for kind, link in (('prev', prev), ('next', next_)):
+        if not link:
+            continue
+        resolved = resolve(d, link)
+        # Every non-empty arrow must resolve to an existing index.html page
+        check(f'  {rel_name}/ {kind} -> page exists', os.path.isfile(resolved), True)
+        tested += 1
 
-scan_all(GALLERIES_ROOT)
-
-# Test depth-1: galleries/26/
+# Spot-check the documented nav rules on the canonical structure
 if os.path.isdir(os.path.join(GALLERIES_ROOT, '26')):
-    test_arrows('26', '', '../')  # prev=none, next=sibling
+    prev, next_ = get_sibling_nav(os.path.join(GALLERIES_ROOT, '26'), all_dirs, GALLERIES_ROOT)
+    check('  26/ prev (first child of root)', prev, '')
 
-
-# Test depth-2: galleries/26/260330_France_Trip/
-if os.path.isdir(os.path.join(GALLERIES_ROOT, '26', '260330_France_Trip')):
-    test_arrows('26/260330_France_Trip', '', '')
-
-# Test depth-3: galleries/26/260330_France_Trip/260318_iceland/
-if os.path.isdir(os.path.join(GALLERIES_ROOT, '26', '260330_France_Trip', '260318_iceland')):
-    test_arrows('26/260330_France_Trip/260318_iceland', '../', '')
+print(f'\n  ({tested} arrow links verified to resolve to real pages)')
 
 
 # ============================================================
@@ -248,3 +217,5 @@ if failed == 0:
 else:
     print(f'{RED}{failed} FAILURES, {passed} PASSED out of {total}{RESET}\n')
     print('Fix the failures and re-run to verify.')
+
+sys.exit(0 if failed == 0 else 1)

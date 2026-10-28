@@ -15,6 +15,7 @@ If --regenerate is passed, it re-runs generate_gallery.py first.
 import os
 import sys
 import re
+import html
 import subprocess
 from pathlib import Path
 from collections import namedtuple
@@ -58,9 +59,9 @@ def resolve_path(base, rel):
         return rel
     if rel == './':
         return os.path.abspath(base)
+    # normpath handles platform separators; do NOT force backslashes (runs on Linux too)
     norm_rel = rel.replace('\\', '/')
-    result = os.path.normpath(os.path.join(base, norm_rel))
-    return result.replace('/', '\\')
+    return os.path.normpath(os.path.join(base, norm_rel))
 
 
 def print_results():
@@ -116,24 +117,29 @@ def parse_html(filepath):
         for m in re.finditer(r'<span\s+class="current">([^<]+)</span>', bc_content):
             data['breadcrumbs'].append((m.group(1).strip(), ''))
 
-    # --- Browse prev/next ---
-    js_match = re.search(r"const browsePrevPath\s*=\s*'([^']*)';", content)
+    # --- Browse prev/next --- (json.dumps emits double-quoted JS strings)
+    js_match = re.search(r'''const browsePrevPath\s*=\s*["']([^"']*)["'];''', content)
     if js_match:
         data['browse_prev'] = js_match.group(1)
-    js_match = re.search(r"const browseNextPath\s*=\s*'([^']*)';", content)
+    js_match = re.search(r'''const browseNextPath\s*=\s*["']([^"']*)["'];''', content)
     if js_match:
         data['browse_next'] = js_match.group(1)
 
     # --- Folder links in gallery grid ---
-    # Folders use onclick="window.location.href='...'" pattern (double outer, single inner)
-    for m in re.finditer(r'''onclick="window\.location\.href='([^']+)'[^>]*>"''', content):
-        href = m.group(1)
+    # Current generator: <div class="gallery-item folder" onclick="window.location.href=&quot;...&quot;">
+    for m in re.finditer(r'class="gallery-item folder"[^>]*onclick="window\.location\.href=&quot;(.*?)&quot;', content):
+        href = html.unescape(m.group(1))
+        if any(href.startswith(p) for p in ['.thumbs', '.lr', 'lightbox']):
+            continue
+        data['folder_links'].append(href)
+    for m in re.finditer(r'class="gallery-item folder"[^>]*onclick="window\.location\.href=\'([^\']*)\'', content):
+        href = html.unescape(m.group(1))
         if any(href.startswith(p) for p in ['.thumbs', '.lr', 'lightbox']):
             continue
         data['folder_links'].append(href)
     # Also catch <a> tags as fallback
-    for m in re.finditer(r'class="gallery-item"[^>]*>\s*<a\s+href="([^"]*)"', content):
-        href = m.group(1)
+    for m in re.finditer(r'class="gallery-item[^"]*folder[^"]*"[^>]*>\s*<a\s+href="([^"]*)"', content):
+        href = html.unescape(m.group(1))
         if any(href.startswith(p) for p in ['.thumbs', '.lr', 'lightbox']):
             continue
         data['folder_links'].append(href)
@@ -142,9 +148,9 @@ def parse_html(filepath):
     for m in re.finditer(r'class="gallery-item[^"]*"[^>]*>\s*<a\s+href="([^"]*)"', content):
         data['image_links'].append(m.group(1))
 
-    # --- Slideshow button ---
-    data['slideshow_exists'] = 'id="slideshow-btn"' in content
-    data['slideshow_random_btn'] = 'id="random-slide-btn"' in content
+    # --- Slideshow button --- (generator emits class="slideshow-btn", no id)
+    data['slideshow_exists'] = 'class="slideshow-btn"' in content
+    data['slideshow_random_btn'] = 'random-btn' in content
 
     return data
 
@@ -173,12 +179,12 @@ def test_breadcrumbs(data, galleries_root):
 
         # Root link should go to parent of galleries/ or similar ancestor
         if name == 'Root':
-            # Check it's a valid directory path
-            check(section, f'Root -> "{basename}"', True)
+            # Hrefs end in index.html; require the target directory to exist
+            check(section, f'Root -> "{basename}"', os.path.isdir(os.path.dirname(resolved)))
             continue
 
         # Intermediate links should point to existing directories
-        is_dir = os.path.isdir(resolved)
+        is_dir = os.path.isdir(os.path.dirname(resolved))
         check(section, f'"{name}" -> "{basename}"', is_dir)
 
     # Check no double slashes
@@ -197,13 +203,14 @@ def test_browse_arrows(data):
 
     if data['browse_prev']:
         resolved = resolve_path(dirpath, data['browse_prev'])
-        is_dir = os.path.isdir(resolved)
-        check(section, f'prev -> "{os.path.basename(resolved)}"', is_dir)
+        # Arrow hrefs point at sibling pages (ending in index.html)
+        is_page = os.path.isfile(resolved)
+        check(section, f'prev -> "{os.path.basename(resolved)}"', is_page)
 
     if data['browse_next']:
         resolved = resolve_path(dirpath, data['browse_next'])
-        is_dir = os.path.isdir(resolved)
-        check(section, f'next -> "{os.path.basename(resolved)}"', is_dir)
+        is_page = os.path.isfile(resolved)
+        check(section, f'next -> "{os.path.basename(resolved)}"', is_page)
 
 
 def test_folder_links(data):
@@ -219,7 +226,8 @@ def test_folder_links(data):
 
     for href in data['folder_links'][:10]:  # limit output
         resolved = resolve_path(dirpath, href)
-        has_index = os.path.isfile(os.path.join(resolved, 'index.html'))
+        # Hrefs may already end in index.html (current generator) or point at the dir
+        has_index = os.path.isfile(resolved) or os.path.isfile(os.path.join(resolved, 'index.html'))
         check(section, f'"{href}" -> "{os.path.basename(resolved)}"', has_index)
 
 
@@ -240,6 +248,15 @@ def test_slideshow_buttons(data):
 # ============================================================
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 GALLERIES_ROOT = os.path.join(SCRIPT_DIR, 'galleries')
+
+# Honor the documented --regenerate flag: rebuild pages before testing them
+if '--regenerate' in sys.argv:
+    print(f'{YELLOW}Regenerating galleries first...{RESET}')
+    subprocess.run(
+        [sys.executable, os.path.join(SCRIPT_DIR, 'generate_gallery.py'),
+         GALLERIES_ROOT, '--slideshow', '--random'],
+        check=True,
+    )
 
 print(f'\n{BOLD}{CYAN}Gallery Navigation Button Tester{RESET}')
 print(f'{BOLD}Testing from: {GALLERIES_ROOT}{RESET}\n')
@@ -285,7 +302,8 @@ for rel, data in pages:
     for href in data['folder_links']:
         resolved = resolve_path(dirpath, href)
         target_rel = os.path.relpath(resolved, GALLERIES_ROOT).replace('\\', '/')
-        target_idx = os.path.join(resolved, 'index.html')
+        # Hrefs may already end in index.html (current generator) or point at the dir
+        target_idx = resolved if resolved.endswith('.html') else os.path.join(resolved, 'index.html')
         exists = os.path.isfile(target_idx)
         check(f'Cross-page: {rel}/', f'"{target_rel}" has index.html', exists, True)
 

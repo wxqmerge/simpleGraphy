@@ -38,7 +38,20 @@ if /I "%~1"=="--help" goto help
 REM --- No files given ---
 if "%~1"=="" goto nopath
 
-powershell -ExecutionPolicy Bypass -File "%PS1%" %*
+REM Rebuild the argument list quoted, stripping a trailing backslash per
+REM argument: Explorer "copy path" of a folder ends with \, and \" would
+REM escape the closing quote and corrupt the PowerShell argv.
+set "ARGS="
+:argloop
+if "%~1"=="" goto argsdone
+set "ARG=%~1"
+if "%ARG:~-1%"=="\" set "ARG=%ARG:~0,-1%"
+set "ARGS=%ARGS% "%ARG%""
+shift
+goto argloop
+:argsdone
+
+powershell -ExecutionPolicy Bypass -File "%PS1%" %ARGS%
 goto end
 
 :help

@@ -1,7 +1,9 @@
 import re
+import json
 import sys
 
-with open('D:/xampp/htdocs/www_misc/index.html', 'r', encoding='utf-8') as f:
+PATH = sys.argv[1] if len(sys.argv) > 1 else 'D:/xampp/htdocs/www_misc/index.html'
+with open(PATH, 'r', encoding='utf-8') as f:
     html = f.read()
 
 # Check for slideshow buttons
@@ -23,8 +25,13 @@ if 'Random' in html and 'random-btn' in html:
 else:
     print("- Random slideshow button NOT found")
 
-# Check currentSubdirs
-match = re.search(r'currentSubdirs = (\[.*?\])', html)
+# Check currentSubdirs (parse as JSON - never eval scanned content)
+match = re.search(r'currentSubdirs = (\[[^\n]*?\]) \|\| \[\];', html)
 if match:
-    subdirs = eval(match.group(1))
-    print(f"currentSubdirs: {len(subdirs)} dirs - {subdirs[:5]}...")
+    try:
+        subdirs = json.loads(match.group(1).replace('<\\/', '</'))
+        print(f"currentSubdirs: {len(subdirs)} dirs - {subdirs[:5]}...")
+    except ValueError:
+        print(f"currentSubdirs: unparsable JSON: {match.group(1)[:120]}...")
+else:
+    print("currentSubdirs NOT found")

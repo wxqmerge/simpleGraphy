@@ -1,26 +1,28 @@
+import os
 import re
 
-with open('galleries/index.html', 'r', encoding='utf-8') as f:
+path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'galleries', 'index.html')
+with open(path, 'r', encoding='utf-8') as f:
     html = f.read()
 
 # Check loadNextDirectory function exists and has the right logic
-if 'hasImages || hasChildren' in html:
-    print("+ hasImages || hasChildren check found")
+if 'findSubdirInTree(dirTreeData, subPath)' in html:
+    print("+ Full-path subdir lookup found")
 else:
-    print("- hasImages || hasChildren check NOT found")
+    print("- Full-path subdir lookup NOT found")
 
-if 'subdirIndex + 1' in html:
-    print("+ subdirIndex + 1 push found")
+if 'dirs: currentSubdirs.slice(), index: subdirIndex, path: currentDirPath' in html:
+    print("+ Parent-state push (with path) found")
 else:
-    print("- subdirIndex + 1 push NOT found")
+    print("- Parent-state push (with path) NOT found")
 
-if 'subdirCache.has' in html:
-    print("+ Cache lookup found")
+if 'function buildDirNavList()' in html and 'walk(subdir, path + subdir.name' in html:
+    print("+ dirNavList built from embedded tree")
 else:
-    print("- Cache lookup NOT found")
+    print("- dirNavList NOT built from embedded tree (stale AJAX impl?)")
 
-# Check currentSubdirs initialization
-match = re.search(r'currentSubdirs = (\[.*?\])', html)
+# Check currentSubdirs initialization (the flat name list ending in || []; )
+match = re.search(r'currentSubdirs = (\[[^\]]*\]) \|\| \[\];', html, re.DOTALL)
 if match:
     print(f"currentSubdirs: {match.group(1)[:80]}...")
 else:

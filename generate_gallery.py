@@ -283,6 +283,32 @@ def get_subdirectories(directory):
     return sorted(dirs, key=lambda x: os.path.basename(x).lower())
 
 
+def has_gallery_content(directory, _cache={}):
+    """True if directory (or any descendant) contains images/videos.
+
+    Mirrors the "gets an index.html" rule so folder cards and nav never link
+    to pages that were never generated. Memoized; a run sees one filesystem state.
+    """
+    directory = os.path.abspath(directory)
+    if directory in _cache:
+        return _cache[directory]
+    result = False
+    try:
+        for entry in os.scandir(directory):
+            if entry.is_file():
+                if Path(entry.name).suffix.lower() in IMAGE_EXTENSIONS | VIDEO_EXTENSIONS:
+                    result = True
+                    break
+            elif entry.is_dir() and entry.name not in EXCLUDED_DIRS:
+                if has_gallery_content(entry.path):
+                    result = True
+                    break
+    except (PermissionError, OSError):
+        result = False
+    _cache[directory] = result
+    return result
+
+
 def get_folder_cover(dirpath):
     """Read and validate .folder_cover file.
     
@@ -291,7 +317,7 @@ def get_folder_cover(dirpath):
     """
     cover_file = os.path.join(dirpath, '.folder_cover')
     try:
-        with open(cover_file, 'r', encoding='utf-8') as f:
+        with open(cover_file, 'r', encoding='utf-8', errors='replace') as f:
             rel_path = f.read().strip()
     except (IOError, OSError):
         return None
@@ -303,8 +329,8 @@ def get_folder_cover(dirpath):
     if os.path.isabs(rel_path):
         return None
     
-    # Normalize separators
-    rel_path = rel_path.replace(os.sep, '/')
+    # Normalize separators (covers may have been written on Windows and synced to Linux)
+    rel_path = rel_path.replace('\\', '/')
     
     # Resolve against dirpath
     resolved = os.path.normpath(os.path.join(dirpath, rel_path))
@@ -385,12 +411,9 @@ def get_slideshow_images(directory, output_dir):
             if entry.is_file():
                 ext = Path(entry.path).suffix.lower()
                 if ext in IMAGE_EXTENSIONS:
-                    base_name = Path(entry.name).stem
-                    
-                    # Determine lightbox source (LR if available)
-                    lr_dir = Path(directory) / '.lr'
-                    lr_file = lr_dir / f"{base_name}_LR.jpg"
-                    
+                    # Determine lightbox source (LR if available; LRs live under output_dir)
+                    lr_file = Path(output_dir) / '.lr' / lr_name_for(entry.name)
+
                     # Store paths relative to output_dir (galleries root)
                     rel_full = os.path.relpath(entry.path, output_dir).replace(os.sep, '/')
                     if lr_file.exists():
@@ -426,25 +449,13 @@ def get_subdirectory_list(directory):
 
 
 def collect_dirs_with_images(root_path):
-    """Collect all subdirectories with images or children in DFS order (excludes root)."""
+    """Collect all subdirectories that get a generated page, in DFS order (excludes root)."""
     result = []
     
     def scan(path):
-        # Don't add the root directory itself
-        if path != root_path:
-            has_direct = bool(get_image_files(path))
-            has_children = False
-            try:
-                for d in os.listdir(path):
-                    if d not in EXCLUDED_DIRS:
-                        full_path = os.path.join(path, d)
-                        if os.path.isdir(full_path):
-                            has_children = True
-                            break
-            except (PermissionError, OSError):
-                pass
-            if has_direct or has_children:
-                result.append(path)
+        # Don't add the root directory itself; membership mirrors page generation
+        if path != root_path and has_gallery_content(path):
+            result.append(path)
         try:
             dirs = sorted(os.listdir(path))
             for d in dirs:
@@ -468,9 +479,11 @@ def get_sibling_nav(current_dir, all_dirs_with_images, root_path):
     """
     current_abs = os.path.abspath(current_dir)
     root_abs = os.path.abspath(root_path)
+    # Only link to directories that actually get an index.html
+    valid = {os.path.normcase(os.path.abspath(d)) for d in all_dirs_with_images}
     
     def get_siblings(dir_abs):
-        """Get all sibling directories (sorted by name)."""
+        """Get all sibling directories that have generated galleries (sorted by name)."""
         parent = os.path.dirname(dir_abs)
         try:
             entries = sorted(os.listdir(parent), key=lambda x: x.lower())
@@ -481,7 +494,7 @@ def get_sibling_nav(current_dir, all_dirs_with_images, root_path):
             if e in EXCLUDED_DIRS:
                 continue
             full = os.path.join(parent, e)
-            if os.path.isdir(full):
+            if os.path.isdir(full) and os.path.normcase(os.path.abspath(full)) in valid:
                 result.append(full)
         return result
     
@@ -489,7 +502,7 @@ def get_sibling_nav(current_dir, all_dirs_with_images, root_path):
     
     # Find current index in siblings
     try:
-        idx = [os.path.abspath(s) for s in siblings].index(current_abs)
+        idx = [os.path.normcase(os.path.abspath(s)) for s in siblings].index(os.path.normcase(current_abs))
     except ValueError:
         return '', ''
     
@@ -505,18 +518,10 @@ def get_sibling_nav(current_dir, all_dirs_with_images, root_path):
     else:
         # No previous sibling at this level - parent is the prev
         parent = os.path.dirname(current_abs)
-        if parent and parent != root_abs:
+        if parent and parent != root_abs and os.path.normcase(parent) in valid:
             prev_path = os.path.relpath(parent, current_dir).replace(os.sep, '/') + '/index.html'
     
     return prev_path, next_path
-
-
-def get_current_slideshow_data(directory):
-    """Get slideshow data for current directory (images + subdirs)."""
-    return {
-        'images': get_slideshow_images(directory, directory),
-        'subdirs': get_subdirectory_list(directory)
-    }
 
 
 def get_random_pool(root_dir, page_dir, max_depth=None):
@@ -540,12 +545,9 @@ def get_random_pool(root_dir, page_dir, max_depth=None):
             if entry.is_file():
                 ext = Path(entry.path).suffix.lower()
                 if ext in IMAGE_EXTENSIONS:
-                    base_name = Path(entry.name).stem
-                    
-                    # Determine lightbox source (LR if available)
-                    lr_dir = Path(page_dir) / rel_prefix.strip('/') / '.lr'
-                    lr_file = lr_dir / f"{base_name}_LR.jpg"
-                    
+                    # Determine lightbox source (LR if available; LRs live under page_dir)
+                    lr_file = Path(page_dir) / rel_prefix.strip('/') / '.lr' / lr_name_for(entry.name)
+
                     # Store paths relative to page_dir so they resolve correctly from any page
                     rel_full = os.path.relpath(entry.path, page_dir).replace(os.sep, '/')
                     if lr_file.exists():
@@ -600,11 +602,9 @@ def build_dir_tree(root_dir, page_dir, max_depth=None):
             if entry.is_file():
                 ext = Path(entry.path).suffix.lower()
                 if ext in IMAGE_EXTENSIONS:
-                    base_name = Path(entry.name).stem
-                    
-                    lr_dir = Path(page_dir) / rel_prefix.strip('/') / '.lr'
-                    lr_file = lr_dir / f"{base_name}_LR.jpg"
-                    
+                    # LR images are generated under page_dir's mirrored .lr dirs
+                    lr_file = Path(page_dir) / rel_prefix.strip('/') / '.lr' / lr_name_for(entry.name)
+
                     rel_full = os.path.relpath(entry.path, page_dir).replace(os.sep, '/')
                     if lr_file.exists():
                         lightbox_src = os.path.relpath(lr_file, page_dir).replace(os.sep, '/')
@@ -620,8 +620,10 @@ def build_dir_tree(root_dir, page_dir, max_depth=None):
                     })
             elif entry.is_dir() and entry.name not in EXCLUDED_DIRS:
                 subdir_path = os.path.join(dir_path, entry.name)
-                subdir_rel = (rel_prefix + entry.name + '/').rstrip('/') if rel_prefix else entry.name
-                subdirs.append(scan(subdir_path, rel_prefix + entry.name + '/', depth + 1))
+                # 'name' is required by the embedded JS tree lookup (findSubdirInTree)
+                node = scan(subdir_path, rel_prefix + entry.name + '/', depth + 1)
+                node['name'] = entry.name
+                subdirs.append(node)
         
         return {'images': images, 'subdirs': subdirs}
     
@@ -700,14 +702,18 @@ def get_exif_data(image_path):
                 focal_35 = exif_dict.get(42035)
                 focal = exif_dict.get(37386)
                 
-                # Helper to convert EXIF fraction tuple to float
+                # Helper to convert EXIF fraction to float (IFDRational, tuple or number)
                 def parse_focal(val):
-                    if isinstance(val, (tuple, list)) and len(val) >= 2:
-                        try:
+                    if val is None:
+                        return None
+                    try:
+                        if isinstance(val, (tuple, list)) and len(val) >= 2:
                             return val[0] / val[1]
-                        except Exception:
-                            return None
-                    return None
+                        if hasattr(val, 'numerator') and hasattr(val, 'denominator'):
+                            return val.numerator / val.denominator
+                        return float(val)
+                    except Exception:
+                        return None
                 
                 fl_35 = parse_focal(focal_35)
                 fl = parse_focal(focal)
@@ -731,11 +737,35 @@ def read_caption(image_path):
     """Read .caption file alongside an image."""
     cap_path = image_path + '.caption'
     try:
-        with open(cap_path, 'r', encoding='utf-8') as f:
+        with open(cap_path, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read().strip()
             return content if content else None
     except (IOError, OSError):
         return None
+
+
+def asset_key(basename):
+    """Collision-safe key for derived assets (thumbs/LRs): 'IMG_1.heic' -> 'IMG_1_heic'.
+
+    Stem-only keys collided when IMG_1.jpg and IMG_1.heic shared a directory.
+    cleanup_gallery.py mirrors these exact names, so keep them in sync.
+    """
+    p = Path(basename)
+    return p.stem + '_' + p.suffix.lower().lstrip('.')
+
+
+def lr_name_for(source_basename):
+    """LR output filename for a source image basename."""
+    return asset_key(source_basename) + '_LR.jpg'
+
+
+def embed_json(obj):
+    """Serialize JSON for embedding inside <script> tags.
+
+    Escapes '</' as '<\\/' (valid JSON string escape) so a filename or caption
+    containing '</script>' cannot terminate the script block.
+    """
+    return json.dumps(obj, separators=(',', ':')).replace('</', '<\\/')
 
 
 def count_faces(image_path):
@@ -794,7 +824,7 @@ def auto_select_covers(root_path):
         if best_image and best_count > 0:
             rel = os.path.relpath(best_image, dirpath).replace(os.sep, '/')
             existing = get_folder_cover(dirpath)
-            if existing and os.path.normpath(existing) == os.path.normpath(rel):
+            if existing and os.path.normpath(existing) == os.path.normpath(os.path.join(dirpath, rel)):
                 unchanged += 1
             else:
                 try:
@@ -858,18 +888,15 @@ def needs_lr_version(source_path, width, height):
     return dimension_sum > 3000 or is_heif
 
 
-def generate_lr_image(source_path, lr_dir, lr_size_max=2000):
-    """Generate low-res version of image (h+w < 2000)."""
+def generate_lr_image(source_path, lr_dir, lr_size_max=2000, force=False):
+    """Generate low-res version of image."""
     try:
         source_path = Path(source_path)
-        base_name = source_path.stem
-        ext = source_path.suffix.lower()
         
-        # Create LR filename with _LR suffix
-        lr_name = f"{base_name}_LR.jpg"
-        lr_path = lr_dir / lr_name
+        # Create LR filename with collision-safe key + _LR suffix
+        lr_path = lr_dir / lr_name_for(source_path.name)
         
-        if not lr_path.exists():
+        if not lr_path.exists() or force:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=Image.DecompressionBombWarning)
                 with Image.open(source_path) as img:
@@ -1005,7 +1032,25 @@ def generate_thumbnail(source_path, thumb_path, thumb_size):
         return False
 
 
-def generate_html(directory, output_dir, root_path, thumb_size, force=False, parent_path=None, random_depth=None, enable_slideshow=False, enable_random=False, browse_prev='', browse_next='', slideshow_data=None):
+def build_breadcrumbs(directory, root_path):
+    """Breadcrumb chain for a gallery page (single source of truth, also used by test_nav)."""
+    rel_path = os.path.relpath(directory, root_path).replace('\\', '/')
+    if rel_path == '.':
+        return [{'name': 'Root', 'link': './index.html'}]
+    parts = [p for p in rel_path.split('/') if p]
+    current_depth = len(parts)
+    # Root goes to parent of root_path
+    breadcrumbs = [{'name': 'Root', 'link': '../' * current_depth + 'index.html'}]
+    for i, part in enumerate(parts):
+        # Each intermediate link: go up to ancestor depth, landing exactly at it
+        breadcrumbs.append({
+            'name': html.escape(part),
+            'link': '../' * (current_depth - i - 1) + 'index.html'
+        })
+    return breadcrumbs
+
+
+def generate_html(directory, output_dir, root_path, thumb_size, force=False, parent_path=None, random_depth=None, enable_slideshow=False, enable_random=False, browse_prev='', browse_next=''):
     """Generate index.html for a directory."""
     images = get_image_files(directory)
     subdirs = get_subdirectories(directory)
@@ -1013,8 +1058,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     # Ensure current directory has a .folder_cover
     ensure_folder_cover(directory, root_path)
     
-    # Skip if no images and no subdirectories
-    if not images and not subdirs:
+    # Skip if nothing (here or below) would be shown
+    if not has_gallery_content(directory):
         return False
     
     dir_name = os.path.basename(directory.rstrip('/')) or 'Gallery'
@@ -1025,19 +1070,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     else:
         path_parts = [html.escape(p) for p in rel_path.split('/') if p]
         dir_name_safe = gallery_root + ' ' + ' '.join(path_parts)
-    if rel_path == '.':
-        breadcrumbs = [{'name': 'Root', 'link': './index.html'}]
-    else:
-        parts = [p for p in rel_path.split('/') if p]
-        current_depth = len(parts)
-        # Root goes to parent of root_path
-        breadcrumbs = [{'name': 'Root', 'link': '../' * current_depth + 'index.html'}]
-        for i, part in enumerate(parts):
-            # Each intermediate link: go up to ancestor depth, landing exactly at it
-            breadcrumbs.append({
-                'name': html.escape(part),
-                'link': '../' * (current_depth - i - 1) + 'index.html'
-            })
+    # Breadcrumbs (shared with test_nav via build_breadcrumbs)
+    breadcrumbs = build_breadcrumbs(directory, root_path)
     
     breadcrumb_html = ''
     for i, item in enumerate(breadcrumbs):
@@ -1055,15 +1089,15 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     
     for img_path in images:
         basename = os.path.basename(img_path)
-        thumb_name = Path(basename).stem + '_thumb.jpg'
+        thumb_name = asset_key(basename) + '_thumb.jpg'
         thumb_path = Path(thumbs_dir) / thumb_name
         
         if should_rebuild(img_path, thumb_path, force):
             generate_thumbnail(img_path, thumb_path, thumb_size)
         
-        rel_thumb = f'.thumbs/{thumb_name}'
-        rel_full = os.path.relpath(img_path, output_dir).replace(os.sep, '/')
-        gallery_path = os.path.relpath(img_path, root_path).replace(os.sep, '/')
+        rel_thumb = html.escape(f'.thumbs/{thumb_name}')
+        rel_full = html.escape(os.path.relpath(img_path, output_dir).replace(os.sep, '/'))
+        gallery_path = html.escape(os.path.relpath(img_path, root_path).replace(os.sep, '/'))
         safe_basename = html.escape(basename)
         
         # Get EXIF data
@@ -1096,11 +1130,10 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         rel_lr = None
         
         if needs_lr_version(img_path, width, height):
-            generate_lr_image(img_path, lr_dir)
-            base_name = Path(basename).stem
-            lr_name = f"{base_name}_LR.jpg"
+            generate_lr_image(img_path, lr_dir, force=force)
+            lr_name = lr_name_for(basename)
             if (lr_dir / lr_name).exists():
-                rel_lr = f'.lr/{lr_name}'
+                rel_lr = html.escape(f'.lr/{lr_name}')
         
         # Use LR for lightbox if available, otherwise use full
         lightbox_src = rel_lr if rel_lr else rel_full
@@ -1124,8 +1157,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     video_items = []
     for vid_path in get_video_files(directory):
         basename = os.path.basename(vid_path)
-        stem = Path(basename).stem
-        thumb_name = f"{stem}_video_thumb.jpg"
+        thumb_name = asset_key(basename) + '_video_thumb.jpg'
         thumb_path = Path(thumbs_dir) / thumb_name
 
         if should_rebuild(vid_path, thumb_path, force):
@@ -1134,8 +1166,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         if not thumb_path.exists():
             continue
 
-        rel_thumb = f'.thumbs/{thumb_name}'
-        rel_video = os.path.relpath(vid_path, output_dir).replace(os.sep, '/')
+        rel_thumb = html.escape(f'.thumbs/{thumb_name}')
+        rel_video = html.escape(os.path.relpath(vid_path, output_dir).replace(os.sep, '/'))
         caption = read_caption(vid_path)
         safe_caption = html.escape(caption) if caption else ''
         w, h = get_video_dimensions(vid_path)
@@ -1151,9 +1183,11 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 </div>
             </div>''')
 
-    # Generate subdirectory items
+    # Generate subdirectory items (only dirs that will actually have a page)
     subdir_items = []
     for subdir in subdirs:
+        if not has_gallery_content(subdir):
+            continue
         subdir_name = os.path.basename(subdir)
         subdir_path = os.path.relpath(subdir, output_dir).replace(os.sep, '/') + '/index.html'
         safe_subdir_name = html.escape(subdir_name)
@@ -1183,7 +1217,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         rel_thumb = None
         if source_image:
-            thumb_name = Path(os.path.basename(source_image)).stem + '_dir_thumb.jpg'
+            thumb_name = asset_key(os.path.basename(source_image)) + '_dir_thumb.jpg'
             thumb_path = Path(thumbs_dir) / thumb_name
             
             if should_rebuild(source_image, thumb_path, force):
@@ -1193,12 +1227,14 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         
         preview_html = ''
         if rel_thumb:
-            preview_html = f'<img src="{rel_thumb}" alt="Preview">'
+            preview_html = f'<img src="{html.escape(rel_thumb)}" alt="Preview">'
         
         stats_text = f'{photo_count} photo{"s" if photo_count != 1 else ""}, {album_count} album{"s" if album_count != 1 else ""}'
+        # JSON-encode then HTML-escape so quotes/apostrophes in dir names can't break the JS string
+        subdir_js = html.escape(json.dumps(subdir_path))
         
         subdir_items.append(f'''
-            <div class="gallery-item folder" onclick="window.location.href='{subdir_path}'">
+            <div class="gallery-item folder" onclick="window.location.href={subdir_js}">
                 {preview_html}
                 <div class="folder-overlay">
                     <span class="folder-name">{safe_subdir_name}</span>
@@ -1212,29 +1248,26 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
     
     # Sequential slideshow: recursive pool (all images in order)
     if enable_slideshow:
-        sequential_images = get_slideshow_images(directory, directory)
+        sequential_images = get_slideshow_images(directory, output_dir)
         subdirs_list = get_subdirectory_list(directory)
         # Use recursive pool for full traversal (same as random but sequential)
-        sequential_recursive_pool = get_random_pool(directory, directory, max_depth=random_depth) if enable_random else get_random_pool(directory, directory)
-        sequential_recursive_json = json.dumps(sequential_recursive_pool, separators=(',', ':'))
+        sequential_recursive_pool = get_random_pool(directory, output_dir, max_depth=random_depth) if enable_random else get_random_pool(directory, output_dir)
+        sequential_recursive_json = embed_json(sequential_recursive_pool)
         # Embed directory tree for navigation (no AJAX needed)
-        dir_tree = build_dir_tree(directory, directory, max_depth=random_depth)
-        dir_tree_json = json.dumps(dir_tree, separators=(',', ':'))
-        # Also embed current dir images for immediate display
-        sequential_json = json.dumps(sequential_images, separators=(',', ':'))
+        dir_tree = build_dir_tree(directory, output_dir, max_depth=random_depth)
+        dir_tree_json = embed_json(dir_tree)
     else:
         sequential_images = []
-        sequential_json = '[]'
         subdirs_list = []
         sequential_recursive_pool = []
         sequential_recursive_json = '[]'
         dir_tree = {'images': [], 'subdirs': []}
-        dir_tree_json = '[]'
+        dir_tree_json = '{"images":[],"subdirs":[]}'
     
     # Random slideshow pool: recursive from this directory
     if enable_random:
-        random_pool = get_random_pool(directory, directory, max_depth=random_depth)
-        random_json = json.dumps(random_pool, separators=(',', ':'))
+        random_pool = get_random_pool(directory, output_dir, max_depth=random_depth)
+        random_json = embed_json(random_pool)
     else:
         random_pool = []
         random_json = '[]'
@@ -1267,11 +1300,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             sequentialImageList = sequentialRecursivePoolData;
         }
 
-        // Current directory images for immediate display
-        let sequentialImageData = ''' + sequential_json + ''';
-        
         // Subdirectories for depth-first traversal
-        currentSubdirs = ''' + json.dumps(subdirs_list, separators=(',', ':')) + ''' || [];'''
+        currentSubdirs = ''' + embed_json(subdirs_list) + ''' || [];'''
     
     random_js_block = ''
     if enable_random:
@@ -1280,12 +1310,6 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         if (randomPoolData) {
             randomPool = randomPoolData;
        }'''
-    
-    # Inline slideshow data for current directory
-    inline_slideshow_data = ''
-    if slideshow_data is not None:
-        inline_json = json.dumps(slideshow_data, separators=(',', ':'))
-        inline_slideshow_data = '<script type="application/json" id="slideshow-data">' + html.escape(inline_json) + '</script>\n        '
     
     # Browse mode directory navigation (sibling-level)
     browse_dir_nav_block = ''
@@ -1932,45 +1956,9 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             cursor: default;
         }}
         
-        /* EXIF orientation transforms */
-        .lightbox-image-container img[data-orientation="6"] {{
-            transform: rotate(90deg);
-            transform-origin: center;
-        }}
-        
-        .lightbox-image-container img[data-orientation="8"] {{
-            transform: rotate(-90deg);
-            transform-origin: center;
-        }}
-        
-        .lightbox-image-container img[data-orientation="3"] {{
-            transform: rotate(180deg);
-            transform-origin: center;
-        }}
-        
-        .lightbox-image-container img[data-orientation="4"] {{
-            transform: scaleX(-1);
-            transform-origin: center;
-        }}
-        
-        .lightbox-image-container img[data-orientation="5"] {{
-            transform: scaleY(-1);
-            transform-origin: center;
-        }}
-        
-        .lightbox-image-container img[data-orientation="7"] {{
-            transform: rotate(-90deg) scaleX(-1);
-            transform-origin: center;
-        }}
-        
-        /* Adjust sizing for rotated images */
-        .lightbox-image-container img[data-orientation="6"],
-        .lightbox-image-container img[data-orientation="7"],
-        .lightbox-image-container img[data-orientation="8"] {{
-            /* Portrait orientation, swap max dimensions */
-            max-width: calc(90vh - 120px) !important;
-            max-height: calc(65vw - 200px) !important;
-        }}
+        /* No EXIF orientation CSS transforms: browsers auto-apply EXIF orientation
+           to JPEGs, and thumbnails/LR images have orientation baked in at
+           generation time — manual transforms here would double-rotate images. */
         
         @media (max-width: 768px) {{
             body {{
@@ -2082,7 +2070,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         <div class="video-lightbox-caption" id="video-caption"></div>
     </div>
 
-    {inline_slideshow_data}<script>
+    <script>
         // HTML escape function for EXIF display
         function escapeHtml(text) {{
             if (!text) return '';
@@ -2123,23 +2111,18 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
         const SLIDESHOW_INTERVAL_MS = 3000;
         
        // Sequential traversal state (depth-first)
-        let currentDirPath = '';
-        let subdirQueue = [];
-        let currentSubdirs = [];
-        let subdirIndex = 0;
-        const subdirCache = new Map();
+         let currentDirPath = '';
+         let subdirQueue = [];
+         let currentSubdirs = [];
+         let subdirIndex = 0;
 
-        // Load inline slideshow data for current directory
-        try {{
-            const inlineEl = document.getElementById('slideshow-data');
-            if (inlineEl) {{
-                subdirCache.set('', JSON.parse(inlineEl.textContent));
-            }}
-        }} catch(e) {{ /* ignore */ }}
+         // Track loaded image src (element .src is absolute; our paths are relative)
+         let lastLightboxSrc = '';
+         let lastSlideshowSrc = '';
 
-        // Directory navigation (sequential mode)
-        let dirNavList = [];
-        let currentDirIndex = -1;
+         // Directory navigation (sequential mode)
+         let dirNavList = [];
+         let currentDirIndex = -1;
         
         // Build image list for navigation
         const images = document.querySelectorAll('.gallery-item img[data-full]');
@@ -2181,24 +2164,25 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             // Set default to landscape until orientation is determined
             lightbox.classList.add('landscape');
             
-            // Set up image loading
-            const newSrc = imageData.full;
-            if (lightboxImg.src === newSrc) {{
-                // Image already loaded from cache
-                if (lightboxImg.naturalWidth && lightboxImg.naturalHeight) {{
-                    setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
-                    lightbox.classList.add('active');
-                    document.body.style.overflow = 'hidden';
-                }}
-            }} else {{
-                // New image, wait for load
-                lightboxImg.onload = function() {{
-                    setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
-                    lightbox.classList.add('active');
-                    document.body.style.overflow = 'hidden';
-                }};
-                lightboxImg.src = newSrc;
-            }}
+             // Set up image loading (compare against the attribute we set, not the absolute element URL)
+             const newSrc = imageData.full;
+             if (lastLightboxSrc === newSrc) {{
+                 // Image already loaded from cache
+                 if (lightboxImg.naturalWidth && lightboxImg.naturalHeight) {{
+                     setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
+                     lightbox.classList.add('active');
+                     document.body.style.overflow = 'hidden';
+                 }}
+             }} else {{
+                 // New image, wait for load
+                 lightboxImg.onload = function() {{
+                     setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
+                     lightbox.classList.add('active');
+                     document.body.style.overflow = 'hidden';
+                 }};
+                 lastLightboxSrc = newSrc;
+                 lightboxImg.src = newSrc;
+             }}
             
                // Parse and display EXIF data
             if (imageData.exif) {{
@@ -2234,13 +2218,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                     }}
                     
                     lightboxExif.innerHTML = exifHtml;
-                    
-                    // Apply EXIF orientation transform
-                    if (exif.orientation && exif.orientation !== 1) {{
-                        lightboxImg.setAttribute('data-orientation', exif.orientation);
-                    }} else {{
-                        lightboxImg.removeAttribute('data-orientation');
-                    }}
+                    // No manual orientation transform: browsers apply EXIF orientation
+                    // automatically, and LR images have orientation baked in at generation.
                 }} catch (err) {{
                     console.error('Error parsing EXIF:', err);
                     lightboxExif.innerHTML = '<div class="exif-header">EXIF Info</div><div class="exif-item">No EXIF data available</div>';
@@ -2321,41 +2300,38 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
        function loadNextDirectory() {{
             while (subdirIndex < currentSubdirs.length) {{
                 const subdir = currentSubdirs[subdirIndex];
-                
-                console.log('Loading subdir:', subdir);
-                
-                // Find this subdir in the embedded tree
-                const data = findSubdirInTree(dirTreeData, subdir + '/');
-                if (!data || (data.images.length === 0 && (!data.subdirs || data.subdirs.length === 0))) {{
-                    console.log('Skipping empty subdir:', subdir);
-                    subdirIndex++;
-                    continue;
-                }}
-                
-                // Save parent state for when we return from children
-                subdirQueue.push({{ dirs: currentSubdirs.slice(), index: subdirIndex + 1 }});
                 subdirIndex++;
+                const subPath = (currentDirPath || '') + subdir + '/';
                 
-                currentDirPath = subdir + '/';
+                // Find this subdir in the embedded tree using its full path
+                const data = findSubdirInTree(dirTreeData, subPath);
+                if (!data) continue;
                 
                 if (data.images.length > 0) {{
+                    // Save parent state so we resume its siblings after this dir ends
+                    subdirQueue.push({{ dirs: currentSubdirs.slice(), index: subdirIndex, path: currentDirPath }});
+                    currentDirPath = subPath;
                     sequentialImageList = data.images;
                     slideshowIndex = 0;
-                    currentSubdirs = data.subdirs || [];
+                    currentSubdirs = (data.subdirs || []).map(s => s.name);
                     subdirIndex = 0;
                     
-                    console.log('Entered dir:', subdir, 'with', sequentialImageList.length, 'images');
+                    console.log('Entered dir:', subPath, 'with', sequentialImageList.length, 'images');
                     openSlideshowImage(slideshowIndex);
                     return true;
                 }} else if (data.subdirs && data.subdirs.length > 0) {{
                     // Directory has no images but has children - recurse into children
-                    currentSubdirs = data.subdirs.map(s => s.name);
+                    const saved = {{ dirs: currentSubdirs, index: subdirIndex, path: currentDirPath }};
+                    currentDirPath = subPath;
+                    currentSubdirs = (data.subdirs || []).map(s => s.name);
                     subdirIndex = 0;
                     
-                    console.log('Recurse into:', subdir, 'no direct images');
-                    const loaded = loadNextDirectory();
-                    if (loaded) return true;
-                    // If recursion didn't find images, continue to next sibling
+                    console.log('Recurse into:', subPath, 'no direct images');
+                    if (loadNextDirectory()) return true;
+                    // Recursion exhausted this branch - restore and try next sibling
+                    currentSubdirs = saved.dirs;
+                    subdirIndex = saved.index;
+                    currentDirPath = saved.path;
                 }}
             }}
             
@@ -2363,6 +2339,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
                 const parentState = subdirQueue.pop();
                 currentSubdirs = parentState.dirs;
                 subdirIndex = parentState.index;
+                currentDirPath = parentState.path;
                 
                 return loadNextDirectory();
             }}
@@ -2418,48 +2395,21 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             slideshowControls.style.display = 'none';
         }}
         
-        async function buildDirNavList() {{
+        function buildDirNavList() {{
             dirNavList = [];
             currentDirIndex = -1;
             
-            // Scan all directories depth-first to find those with images
-            const scannedDirs = new Map();
-            
-            async function scanDir(dirPath, parentScanned) {{
-                // Check cache first
-                let data = subdirCache.get(dirPath);
-                if (!data) {{
-                    try {{
-                        const resp = await fetch(dirPath + 'slideshow.json');
-                        if (resp.ok) {{
-                            data = await resp.json();
-                            subdirCache.set(dirPath, data);
-                        }} else {{
-                            return;
-                        }}
-                    }} catch (e) {{
-                        return;
-                    }}
+            // Walk the embedded directory tree (DFS) collecting dirs with images
+            function walk(node, path) {{
+                if (!node) return;
+                if (node.images && node.images.length > 0) {{
+                    dirNavList.push({{ path: path, name: node.name || path.split('/').filter(Boolean).pop() || '.', imageCount: node.images.length }});
                 }}
-                
-                const hasImages = data && data.images && data.images.length > 0;
-                const subdirs = data.subdirs || [];
-                
-                if (hasImages) {{
-                    dirNavList.push({{ path: dirPath, name: dirPath.split('/').pop() || '.', imageCount: data.images.length }});
-                }}
-                
-                for (const subdir of subdirs) {{
-                    const subdirPath = dirPath + subdir + '/';
-                    if (!scannedDirs.has(subdirPath)) {{
-                        scannedDirs.set(subdirPath, true);
-                        await scanDir(subdirPath, scannedDirs);
-                    }}
+                for (const subdir of node.subdirs || []) {{
+                    walk(subdir, path + subdir.name + '/');
                 }}
             }}
-            
-            // Start scanning from root
-            await scanDir('', new Map());
+            if (typeof dirTreeData !== 'undefined') walk(dirTreeData, '');
             
             // Find current directory index
             if (currentDirPath && dirNavList.length > 0) {{
@@ -2472,6 +2422,11 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             }}
             
             updateDirNavDisplay();
+        }}
+        
+        function slideshowDirData(path) {{
+            if (typeof dirTreeData === 'undefined') return null;
+            return findSubdirInTree(dirTreeData, path);
         }}
         
         function updateDirNavDisplay() {{
@@ -2502,7 +2457,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             dirNextBtn.classList.toggle('disabled', currentDirIndex >= dirNavList.length - 1);
         }}
         
-        async function dirNavPrev() {{
+        function dirNavPrev() {{
             if (currentDirIndex <= 0 || dirNavList.length === 0) return;
             
             const targetIndex = currentDirIndex - 1;
@@ -2515,38 +2470,26 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             subdirQueue = [];
             subdirIndex = 0;
             
-            let data = subdirCache.get(targetDir.path);
-            if (!data) {{
-                try {{
-                    const resp = await fetch(targetDir.path + 'slideshow.json');
-                    if (resp.ok) {{
-                        data = await resp.json();
-                        subdirCache.set(targetDir.path, data);
-                    }}
-                }} catch (e) {{
-                    console.error('Failed to load directory:', targetDir.path, e);
-                }}
-            }}
-            
+            const data = slideshowDirData(targetDir.path);
             if (data && data.images && data.images.length > 0) {{
                 sequentialImageList = data.images;
                 slideshowIndex = data.images.length - 1;
-                currentSubdirs = data.subdirs || [];
+                currentSubdirs = (data.subdirs || []).map(s => s.name);
                 openSlideshowImage(slideshowIndex);
                 resetSlideshowTimer();
                 return;
             }}
             
             // Fallback: use recursive pool for this directory
-            if (window._sequentialRecursivePool && window._sequentialRecursivePool.length > 0) {{
-                sequentialImageList = window._sequentialRecursivePool;
+            if (typeof sequentialRecursivePoolData !== 'undefined' && sequentialRecursivePoolData.length > 0) {{
+                sequentialImageList = sequentialRecursivePoolData;
                 slideshowIndex = 0;
                 openSlideshowImage(slideshowIndex);
                 resetSlideshowTimer();
             }}
         }}
         
-        async function dirNavNext() {{
+        function dirNavNext() {{
             if (currentDirIndex >= dirNavList.length - 1 || dirNavList.length === 0) return;
             
             const targetIndex = currentDirIndex + 1;
@@ -2559,31 +2502,19 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             subdirQueue = [];
             subdirIndex = 0;
             
-            let data = subdirCache.get(targetDir.path);
-            if (!data) {{
-                try {{
-                    const resp = await fetch(targetDir.path + 'slideshow.json');
-                    if (resp.ok) {{
-                        data = await resp.json();
-                        subdirCache.set(targetDir.path, data);
-                    }}
-                }} catch (e) {{
-                    console.error('Failed to load directory:', targetDir.path, e);
-                }}
-            }}
-            
+            const data = slideshowDirData(targetDir.path);
             if (data && data.images && data.images.length > 0) {{
                 sequentialImageList = data.images;
                 slideshowIndex = 0;
-                currentSubdirs = data.subdirs || [];
+                currentSubdirs = (data.subdirs || []).map(s => s.name);
                 openSlideshowImage(slideshowIndex);
                 resetSlideshowTimer();
                 return;
             }}
             
             // Fallback: use recursive pool for this directory
-            if (window._sequentialRecursivePool && window._sequentialRecursivePool.length > 0) {{
-                sequentialImageList = window._sequentialRecursivePool;
+            if (typeof sequentialRecursivePoolData !== 'undefined' && sequentialRecursivePoolData.length > 0) {{
+                sequentialImageList = sequentialRecursivePoolData;
                 slideshowIndex = 0;
                 openSlideshowImage(slideshowIndex);
                 resetSlideshowTimer();
@@ -2611,7 +2542,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             }}
 
             const newSrc = imageData.full;
-            if (lightboxImg.src === newSrc && lightboxImg.naturalWidth) {{
+            if (lastSlideshowSrc === newSrc && lightboxImg.naturalWidth) {{
                 setOrientation(lightboxImg.naturalWidth, lightboxImg.naturalHeight);
                 updateSlideshowProgress();
                 lightboxFilename.textContent = imageData.filename || '';
@@ -2643,6 +2574,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             const tempImg = new Image();
             tempImg.onload = function() {{
                 lightboxImg.src = newSrc;
+                lastSlideshowSrc = newSrc;
                 setOrientation(tempImg.naturalWidth, tempImg.naturalHeight);
                 updateSlideshowProgress();
                 lightboxFilename.textContent = imageData.filename || '';
@@ -2672,6 +2604,7 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             tempImg.onerror = function() {{
                 console.error('Failed to preload slideshow image:', newSrc);
                 lightboxImg.src = newSrc;
+                lastSlideshowSrc = newSrc;
                 lightboxFilename.textContent = (imageData.filename || '') + ' [failed to load]';
             }};
             tempImg.src = newSrc;
@@ -2865,6 +2798,8 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
             document.body.style.overflow = '';
             setTimeout(() => {{
                 lightboxImg.src = '';
+                lastLightboxSrc = '';
+                lastSlideshowSrc = '';
             }}, 200);
         }}
         
@@ -2939,21 +2874,14 @@ def generate_html(directory, output_dir, root_path, thumb_size, force=False, par
 
 def process_directory(directory, output_dir, root_path, thumb_size, force, random_depth=None, enable_slideshow=False, enable_random=False, browse_prev='', browse_next=''):
     """Process a single directory and generate its index.html."""
-    images = get_image_files(directory)
-    subdirs = get_subdirectories(directory)
-    
-    # Skip if no content
-    if not images and not subdirs:
+    # Same rule as generate_html: page exists iff content exists here or below
+    if not has_gallery_content(directory):
         return 0
     
     print(f"  Processing: {os.path.relpath(directory, root_path) or 'root'}")
     
     success = 0
-    slideshow_data = None
-    if enable_slideshow or enable_random:
-        slideshow_data = get_current_slideshow_data(directory)
-    
-    if generate_html(directory, output_dir, root_path, thumb_size, force=force, random_depth=random_depth, enable_slideshow=enable_slideshow, enable_random=enable_random, browse_prev=browse_prev, browse_next=browse_next, slideshow_data=slideshow_data):
+    if generate_html(directory, output_dir, root_path, thumb_size, force=force, random_depth=random_depth, enable_slideshow=enable_slideshow, enable_random=enable_random, browse_prev=browse_prev, browse_next=browse_next):
         success += 1
     
     return success
@@ -2964,7 +2892,7 @@ def calculate_metrics(root_path, output_root):
     metrics = {}
     
     # Total size of all index.html files
-    html_files = count_files_recursive(output_root, '.html', EXCLUDED_DIRS)
+    html_files = 0
     html_size = 0
     for dirpath, _, filenames in os.walk(output_root):
         if any(d in EXCLUDED_DIRS for d in dirpath.split(os.sep)):
@@ -2973,15 +2901,15 @@ def calculate_metrics(root_path, output_root):
             if f == 'index.html':
                 try:
                     html_size += os.path.getsize(os.path.join(dirpath, f))
+                    html_files += 1
                 except OSError:
                     pass
     metrics['html_count'] = html_files
     metrics['html_size'] = html_size
     
-    # Total size of original photos
-    photo_size = get_recursive_dir_size(root_path, EXCLUDED_DIRS)
-    metrics['photo_count'] = count_files_recursive(root_path, excluded_dirs=EXCLUDED_DIRS)
-    # Filter to only image extensions for count
+    # Total size of original photos (image extensions only — counting non-photos
+    # here would also double-count images that the loop adds individually)
+    photo_size = 0
     metrics['photo_count'] = 0
     for dirpath, _, filenames in os.walk(root_path):
         if any(d in EXCLUDED_DIRS for d in dirpath.split(os.sep)):
@@ -2999,7 +2927,7 @@ def calculate_metrics(root_path, output_root):
     thumb_size = 0
     thumb_count = 0
     for dirpath, _, filenames in os.walk(root_path):
-        if '.thumbs' not in dirpath:
+        if '.thumbs' not in dirpath.split(os.sep):
             continue
         for f in filenames:
             try:
@@ -3014,7 +2942,7 @@ def calculate_metrics(root_path, output_root):
     lr_size = 0
     lr_count = 0
     for dirpath, _, filenames in os.walk(root_path):
-        if '.lr' not in dirpath:
+        if '.lr' not in dirpath.split(os.sep):
             continue
         for f in filenames:
             try:
@@ -3037,9 +2965,8 @@ def print_metrics(metrics):
     print(f"Thumbnails:        {metrics['thumb_count']:6,} files  ({format_size(metrics['thumb_size'])})")
     print(f"LR Images:         {metrics['lr_count']:6,} files  ({format_size(metrics['lr_size'])})")
     print(f"Index HTML Files:  {metrics['html_count']:6,} files  ({format_size(metrics['html_size'])})")
-    print(f"Slideshow JSON:    {metrics.get('json_count', 0):6,} files  ({format_size(metrics.get('json_size', 0))})")
     print("-" * 50)
-    total_generated = metrics['thumb_size'] + metrics['lr_size'] + metrics['html_size'] + metrics.get('json_size', 0)
+    total_generated = metrics['thumb_size'] + metrics['lr_size'] + metrics['html_size']
     print(f"Total Generated:   {format_size(total_generated)}")
     if metrics['photo_size'] > 0:
         ratio = (total_generated / metrics['photo_size']) * 100

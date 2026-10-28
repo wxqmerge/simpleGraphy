@@ -26,8 +26,11 @@ static class Program
 
         string dir = args.Length > 0 ? args[0].Trim().Trim('"') : PickFolder() ?? "";
         if (string.IsNullOrEmpty(dir)) Environment.Exit(0);
-        if (args.Length > 1 && int.TryParse(args[1], out int secs))
-            intervalMs = secs * 1000;
+        if (args.Length > 1 && int.TryParse(args[1], out int secs) && secs > 0)
+        {
+            long ms = (long)secs * 1000;
+            if (ms <= int.MaxValue) intervalMs = (int)ms;
+        }
 
         if (!Directory.Exists(dir))
         {
@@ -36,8 +39,7 @@ static class Program
         }
 
         string[] exts = { "*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.tiff", "*.tif" };
-        foreach (var ext in exts)
-            images.AddRange(Directory.GetFiles(dir, ext, SearchOption.AllDirectories));
+        CollectImages(dir, exts, images);
 
         if (images.Count == 0)
         {
@@ -163,6 +165,22 @@ static class Program
         form!.Bounds = Screen.AllScreens[screenIdx % Screen.AllScreens.Length].Bounds;
     }
 
+    // Recurse directories, skipping ones we cannot read; collect files matching exts.
+    static void CollectImages(string dir, string[] exts, List<string> into)
+    {
+        foreach (var ext in exts)
+        {
+            try { into.AddRange(Directory.GetFiles(dir, ext)); }
+            catch (Exception ex) when (ex is UnauthorizedAccessException || ex is PathTooLongException || ex is IOException) { }
+        }
+
+        string[] subdirs;
+        try { subdirs = Directory.GetDirectories(dir); }
+        catch (Exception ex) when (ex is UnauthorizedAccessException || ex is PathTooLongException || ex is IOException) { return; }
+        foreach (var sd in subdirs)
+            CollectImages(sd, exts, into);
+    }
+
     static void Advance(int dir)
     {
         index = (index + dir + images.Count) % images.Count;
@@ -175,13 +193,16 @@ static class Program
         string name = Path.GetFileName(path);
         try
         {
-            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            using var img = Image.FromStream(fs);
+            // Image.FromStream needs the stream alive for the image's lifetime;
+            // read bytes first and make a pixel copy that survives disposal.
+            byte[] data = File.ReadAllBytes(path);
+            using var ms = new MemoryStream(data);
+            using var img = Image.FromStream(ms);
             img.RotateFlip(GetRotateFlip(img));
 
             infoParts = BuildInfo(img, path);
             currentImage?.Dispose();
-            currentImage = (Image)img.Clone();
+            currentImage = new Bitmap(img);
         }
         catch
         {

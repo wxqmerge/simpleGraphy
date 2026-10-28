@@ -15,59 +15,109 @@ import argparse
 import os
 from pathlib import Path
 
-# Supported image extensions
+# Supported image/video extensions and excluded dirs (mirror generate_gallery.py)
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif'}
+VIDEO_EXTENSIONS = {'.mp4', '.webm', '.m4v'}
+EXCLUDED_DIRS = {'.thumbs', '.lr', '.git', '__pycache__', 'node_modules'}
+
+# Marker present in every index.html produced by generate_gallery.py
+GENERATED_HTML_MARKER = 'cover-toast'
 
 
-def find_source_images(directory):
-    """Find all source images in a directory (not subdirs)."""
-    sources = set()
+def asset_key(basename):
+    """Mirror of generate_gallery.asset_key - keep the two in sync."""
+    p = Path(basename)
+    return p.stem + '_' + p.suffix.lower().lstrip('.')
+
+
+def resolve_cover(subdir):
+    """Resolve a subdirectory's .folder_cover to an image path, or None."""
+    cover_file = subdir / '.folder_cover'
     try:
-        for entry in os.scandir(directory):
-            if entry.is_file():
-                ext = Path(entry.path).suffix.lower()
-                if ext in IMAGE_EXTENSIONS:
-                    # Store stem (filename without extension)
-                    sources.add(entry.name.rsplit('.', 1)[0])
+        rel_path = cover_file.read_text(encoding='utf-8', errors='replace').strip()
+    except (IOError, OSError):
+        return None
+    rel_path = rel_path.replace('\\', '/')
+    if not rel_path or os.path.isabs(rel_path):
+        return None
+    resolved = os.path.normpath(os.path.join(str(subdir), rel_path))
+    if not os.path.isfile(resolved):
+        return None
+    if Path(resolved).suffix.lower() not in IMAGE_EXTENSIONS:
+        return None
+    return resolved
+
+
+def collect_expected(dirpath):
+    """Compute the set of .thumbs/.lr filenames generate_gallery.py owns here.
+
+    Returns None when the source directory cannot be scanned - callers MUST
+    then skip the directory instead of treating every asset as orphaned.
+    """
+    expected_thumbs = set()
+    expected_lr = set()
+    unknown_dir_thumbs = False
+    source_count = 0
+    try:
+        entries = list(os.scandir(dirpath))
     except (PermissionError, OSError) as e:
-        print(f"  [WARN] Error scanning {directory}: {e}")
-    return sources
+        print(f"  [WARN] Error scanning {dirpath}: {e}")
+        return None
+    for entry in entries:
+        try:
+            if entry.is_file():
+                ext = Path(entry.name).suffix.lower()
+                if ext in IMAGE_EXTENSIONS:
+                    source_count += 1
+                    expected_thumbs.add(asset_key(entry.name) + '_thumb.jpg')
+                    expected_lr.add(asset_key(entry.name) + '_LR.jpg')
+                elif ext in VIDEO_EXTENSIONS:
+                    expected_thumbs.add(asset_key(entry.name) + '_video_thumb.jpg')
+            elif entry.is_dir() and entry.name not in EXCLUDED_DIRS:
+                cover = resolve_cover(Path(entry.path))
+                if cover:
+                    expected_thumbs.add(asset_key(os.path.basename(cover)) + '_dir_thumb.jpg')
+                else:
+                    # No resolvable cover: we cannot know which file the folder
+                    # preview uses, so never orphan dir thumbs here.
+                    unknown_dir_thumbs = True
+        except OSError as e:
+            print(f"  [WARN] Error scanning {dirpath}: {e}")
+            return None
+    return {'thumbs': expected_thumbs, 'lr': expected_lr,
+            'unknown_dir_thumbs': unknown_dir_thumbs, 'source_count': source_count}
 
 
-def cleanup_thumbs(thumbs_dir, source_stems):
-    """Remove orphaned thumbnails."""
+def cleanup_thumbs(thumbs_dir, expected):
+    """Return orphaned thumbnails (names not owned by the generator anymore)."""
     deleted = []
     try:
         for entry in os.scandir(thumbs_dir):
-            if entry.is_file() and entry.name.endswith('_thumb.jpg'):
-                # Skip directory preview thumbnails - they're previews for subdirectories
-                # and their source images are in those subdirectories, not the current folder
-                if entry.name.endswith('_dir_thumb.jpg'):
-                    continue
-                
-                # Extract original filename stem for regular thumbnails
-                # e.g., "IMG_123_thumb.jpg" -> "IMG_123"
-                stem = entry.name.rsplit('_thumb', 1)[0]
-                if stem not in source_stems:
-                    deleted.append(entry.path)
+            if not (entry.is_file() and entry.name.endswith('_thumb.jpg')):
+                continue
+            if entry.name in expected['thumbs']:
+                continue
+            if entry.name.endswith('_dir_thumb.jpg') and expected['unknown_dir_thumbs']:
+                continue
+            deleted.append(entry.path)
     except (PermissionError, OSError) as e:
+        # Scan failure is not evidence of orphanhood
         print(f"  [WARN] Error scanning {thumbs_dir}: {e}")
+        return []
     return deleted
 
 
-def cleanup_lr(lr_dir, source_stems):
-    """Remove orphaned LR files."""
+def cleanup_lr(lr_dir, expected):
+    """Return orphaned LR files."""
     deleted = []
     try:
         for entry in os.scandir(lr_dir):
             if entry.is_file() and entry.name.endswith('_LR.jpg'):
-                # Extract original filename stem
-                # e.g., "IMG_123_LR.jpg" -> "IMG_123"
-                stem = entry.name.rsplit('_LR', 1)[0]
-                if stem not in source_stems:
+                if entry.name not in expected['lr']:
                     deleted.append(entry.path)
     except (PermissionError, OSError) as e:
         print(f"  [WARN] Error scanning {lr_dir}: {e}")
+        return []
     return deleted
 
 
@@ -82,8 +132,12 @@ def cleanup_folder_covers(dirpath):
     
     try:
         rel_path = cover_file.read_text(encoding='utf-8').strip()
-    except (IOError, OSError):
+    except UnicodeDecodeError:
+        # Genuinely invalid content - treat as broken cover
         return [str(cover_file)]
+    except (IOError, OSError):
+        # Transient I/O failure is not evidence of orphanhood
+        return []
     
     if not rel_path:
         return [str(cover_file)]
@@ -92,8 +146,8 @@ def cleanup_folder_covers(dirpath):
     if os.path.isabs(rel_path):
         return [str(cover_file)]
     
-    # Resolve against dirpath
-    rel_path = rel_path.replace(os.sep, '/')
+    # Resolve against dirpath (covers may be written on Windows, read on Linux)
+    rel_path = rel_path.replace('\\', '/')
     resolved = os.path.normpath(os.path.join(str(dirpath), rel_path))
     
     # Check if file exists and has valid extension
@@ -176,17 +230,19 @@ Examples:
         if any(part.startswith('.') for part in rel_path.parts):
             continue
         
-        # Get source image stems in this directory
-        source_stems = find_source_images(current_path)
-        total_source_files += len(source_stems)
+        # Compute expected generated assets (None = scan failed, never delete)
+        expected = collect_expected(current_path)
+        if expected is None:
+            continue
+        total_source_files += expected['source_count']
         
         if args.verbose:
-            print(f"\n{rel_path or 'root'}: {len(source_stems)} source file(s)")
+            print(f"\n{rel_path or 'root'}: {expected['source_count']} source file(s)")
         
         # Check .thumbs directory
         thumbs_dir = current_path / '.thumbs'
         if thumbs_dir.is_dir():
-            orphaned_thumbs = cleanup_thumbs(thumbs_dir, source_stems)
+            orphaned_thumbs = cleanup_thumbs(thumbs_dir, expected)
             
             # Count thumbnails in this directory
             try:
@@ -194,7 +250,7 @@ Examples:
                 total_thumbs_found += thumb_count
                 if args.verbose and thumb_count > 0:
                     print(f"    .thumbs/: {thumb_count} thumbnail(s), {len(orphaned_thumbs)} orphaned")
-            except:
+            except (PermissionError, OSError):
                 pass
             
             if orphaned_thumbs:
@@ -208,7 +264,7 @@ Examples:
         # Check .lr directory
         lr_dir = current_path / '.lr'
         if lr_dir.is_dir():
-            orphaned_lr = cleanup_lr(lr_dir, source_stems)
+            orphaned_lr = cleanup_lr(lr_dir, expected)
             
             # Count LR files in this directory
             try:
@@ -216,7 +272,7 @@ Examples:
                 total_lr_found += lr_count
                 if args.verbose and lr_count > 0:
                     print(f"    .lr/: {lr_count} LR file(s), {len(orphaned_lr)} orphaned")
-            except:
+            except (PermissionError, OSError):
                 pass
             
             if orphaned_lr:
@@ -256,6 +312,11 @@ Examples:
     # Delete orphaned files
     print("\nDeleting orphaned files...")
     
+    deleted_thumbs = 0
+    deleted_lr = 0
+    deleted_covers = 0
+    deleted_bytes = 0
+    
     for dirpath, dirnames, filenames in os.walk(root_path):
         current_path = Path(dirpath)
         rel_path = current_path.relative_to(root_path)
@@ -263,41 +324,50 @@ Examples:
         if any(part.startswith('.') for part in rel_path.parts):
             continue
         
-        source_stems = find_source_images(current_path)
+        expected = collect_expected(current_path)
+        if expected is None:
+            # Could not scan sources - delete nothing in this directory
+            continue
         
         # Delete orphaned thumbnails
         thumbs_dir = current_path / '.thumbs'
         if thumbs_dir.is_dir():
-            orphaned_thumbs = cleanup_thumbs(thumbs_dir, source_stems)
-            for thumb_path in orphaned_thumbs:
+            for thumb_path in cleanup_thumbs(thumbs_dir, expected):
                 try:
+                    size = os.path.getsize(thumb_path)
                     os.remove(thumb_path)
+                    deleted_thumbs += 1
+                    deleted_bytes += size
                 except OSError as e:
                     print(f"  [ERROR] Failed to delete {thumb_path}: {e}")
         
         # Delete orphaned LR files
         lr_dir = current_path / '.lr'
         if lr_dir.is_dir():
-            orphaned_lr = cleanup_lr(lr_dir, source_stems)
-            for lr_path in orphaned_lr:
+            for lr_path in cleanup_lr(lr_dir, expected):
                 try:
+                    size = os.path.getsize(lr_path)
                     os.remove(lr_path)
+                    deleted_lr += 1
+                    deleted_bytes += size
                 except OSError as e:
                     print(f"  [ERROR] Failed to delete {lr_path}: {e}")
         
         # Delete orphaned .folder_cover files
-        orphaned_covers = cleanup_folder_covers(current_path)
-        for cover_path in orphaned_covers:
+        for cover_path in cleanup_folder_covers(current_path):
             try:
+                size = os.path.getsize(cover_path)
                 os.remove(cover_path)
+                deleted_covers += 1
+                deleted_bytes += size
             except OSError as e:
                 print(f"  [ERROR] Failed to delete {cover_path}: {e}")
     
     print("\nDone! Deleted:")
-    print(f"  - {total_thumbs_deleted} thumbnail(s)")
-    print(f"  - {total_lr_deleted} LR file(s)")
-    print(f"  - {total_covers_deleted} folder cover(s)")
-    print(f"  - Freed {total_bytes_freed / 1024 / 1024:.2f} MB")
+    print(f"  - {deleted_thumbs} thumbnail(s)")
+    print(f"  - {deleted_lr} LR file(s)")
+    print(f"  - {deleted_covers} folder cover(s)")
+    print(f"  - Freed {deleted_bytes / 1024 / 1024:.2f} MB")
     
     return 0
 
@@ -320,15 +390,20 @@ def cleanup_all(root_path, dry_run=False):
         if any(part.startswith('.') and part not in {'.git'} for part in rel_path.parts):
             continue
         
-        # Remove index.html files
+        # Remove index.html files (only ones we generated, never hand-authored pages)
         if 'index.html' in filenames:
             html_file = current_path / 'index.html'
             try:
-                size = os.path.getsize(html_file)
-                if not dry_run:
-                    html_file.unlink()
-                deleted_files.append((html_file, size))
-                total_freed += size
+                # cover-toast sits near </body>, so scan the whole file
+                content = html_file.read_text(encoding='utf-8', errors='replace')
+                if GENERATED_HTML_MARKER not in content:
+                    print(f"  [SKIP] Not generated by gallery tool: {html_file}")
+                else:
+                    size = os.path.getsize(html_file)
+                    if not dry_run:
+                        html_file.unlink()
+                    deleted_files.append((html_file, size))
+                    total_freed += size
             except OSError as e:
                 print(f"  [ERROR] Failed to delete {html_file}: {e}")
         

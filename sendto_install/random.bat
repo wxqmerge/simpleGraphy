@@ -88,16 +88,16 @@ if not defined TARGET (
 if exist "%TARGET%\" set "FOLDER=%TARGET%"
 if exist "%TARGET%" if not defined FOLDER for %%I in ("%TARGET%") do set "FOLDER=%%~dpI"
 if not defined FOLDER (
-    echo ERROR: Not found: %TARGET%
+    echo ERROR: Not found: "%TARGET%"
     goto end
 )
 if "%FOLDER:~-1%"=="\" set "FOLDER=%FOLDER:~0,-1%"
 
 if defined INTERVAL (
-    echo Random slideshow: %FOLDER%  interval: %INTERVAL%s
+    echo Random slideshow: "%FOLDER%"  interval: %INTERVAL%s
     start "" "%EXE%" "%FOLDER%" "%INTERVAL%"
 ) else (
-    echo Random slideshow: %FOLDER%
+    echo Random slideshow: "%FOLDER%"
     start "" "%EXE%" "%FOLDER%"
 )
 

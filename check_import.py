@@ -1,5 +1,5 @@
 import sys
-sys.path.insert(0, 'D:/xampp/htdocs/simpleGraphy')
+sys.path.insert(0, 'D:/simpleGraphy')
 from generate_gallery import get_subdirectory_list
 
 # Test with the www_misc directory

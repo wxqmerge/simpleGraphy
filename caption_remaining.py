@@ -1,6 +1,6 @@
 import os, sys, json, requests, time, base64
 
-album_dir = sys.argv[1] if len(sys.argv) > 1 else r"D:\xampp\htdocs\simpleGraphy\galleries\Marmot_Buckhorn_Key_Exchange_72023"
+album_dir = sys.argv[1] if len(sys.argv) > 1 else r"D:\simpleGraphy\galleries\Marmot_Buckhorn_Key_Exchange_72023"
 lr_dir = os.path.join(album_dir, ".lr")
 api_url = "http://localhost:8080/v1/chat/completions"
 api_key = "sk-123"
@@ -10,7 +10,7 @@ prompt = "Describe this photo in 1-2 sentences. Focus on subjects, setting, and 
 headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
 # Get all image files, skip HEIC (llama-server cannot decode without ffprobe)
-all_images = [f for f in os.listdir(album_dir) if f.endswith(('.jpg', '.jpeg'))]
+all_images = [f for f in os.listdir(album_dir) if f.lower().endswith(('.jpg', '.jpeg'))]
 uncaptioned = []
 for img in sorted(all_images):
     caption_file = os.path.join(album_dir, img + ".caption")
@@ -20,30 +20,24 @@ for img in sorted(all_images):
 print(f"Processing {len(uncaptioned)} uncaptioned JPEG images...")
 print(f"Skipping HEIC files (ffprobe not available)")
 
-# Resume from checkpoint
-checkpoint_file = os.path.join(album_dir, ".caption_progress")
-start_idx = 0
-if os.path.exists(checkpoint_file):
-    with open(checkpoint_file, 'r') as f:
-        start_idx = int(f.read().strip())
-    print(f"Resuming from index {start_idx}")
 
+def lr_name_for(basename):
+    # Mirror of generate_gallery.lr_name_for: 'IMG.jpg' -> 'IMG_jpg_LR.jpg'
+    stem, ext = os.path.splitext(basename)
+    return f"{stem}_{ext.lower().lstrip('.')}_LR.jpg"
+
+
+# No numeric checkpoint: the .caption sidecar files ARE the resume state, so a
+# re-run naturally continues where the last one stopped.
 for i, img in enumerate(uncaptioned, 1):
-    if i <= start_idx:
-        continue
     # Try LR version first, fall back to original
-    if img.lower().endswith('.jpg'):
-        lr_name = img.replace('.jpg', '_LR.jpg')
-        lr_path = os.path.join(lr_dir, lr_name)
-        if os.path.exists(lr_path):
-            img_path = lr_path
-            print(f"[{i}/{len(uncaptioned)}] {img} (using LR)")
-        else:
-            img_path = os.path.join(album_dir, img)
-            print(f"[{i}/{len(uncaptioned)}] {img} (full res)")
+    lr_path = os.path.join(lr_dir, lr_name_for(img))
+    if os.path.exists(lr_path):
+        img_path = lr_path
+        print(f"[{i}/{len(uncaptioned)}] {img} (using LR)")
     else:
         img_path = os.path.join(album_dir, img)
-        print(f"[{i}/{len(uncaptioned)}] {img} (jpeg)")
+        print(f"[{i}/{len(uncaptioned)}] {img} (full res)")
 
     # Read image as base64
     with open(img_path, 'rb') as f:
@@ -76,9 +70,6 @@ for i, img in enumerate(uncaptioned, 1):
                     with open(caption_file, 'w', encoding='utf-8') as f:
                         f.write(caption)
                     print(f"  OK: {caption[:80]}")
-                    # Save checkpoint
-                    with open(checkpoint_file, 'w') as cf:
-                        cf.write(str(i))
                     break
                 else:
                     print(f"  EMPTY response from server")
@@ -95,9 +86,5 @@ for i, img in enumerate(uncaptioned, 1):
         print(f"  FAILED after {max_retries} attempts, skipping")
 
     time.sleep(1)
-
-# Clean up checkpoint
-if os.path.exists(checkpoint_file):
-    os.remove(checkpoint_file)
 
 print("\nDone!")

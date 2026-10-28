@@ -23,6 +23,7 @@ Cron (daily 01:30, after the main gallery job):
 import argparse
 import fnmatch
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -63,6 +64,30 @@ def find_script(explicit):
     sys.exit('ERROR: generate_gallery.py not found (use --script or GALLERY_SCRIPT)')
 
 
+def run_with_timeout(cmd, timeout):
+    """Run cmd, killing the whole process tree on timeout (not just the direct child)."""
+    kwargs = {}
+    if os.name == 'posix':
+        kwargs['start_new_session'] = True
+    else:
+        kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+    proc = subprocess.Popen(cmd, **kwargs)
+    try:
+        proc.communicate(timeout=timeout or None)
+        return proc.returncode
+    except subprocess.TimeoutExpired:
+        if os.name == 'posix':
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except OSError:
+                proc.kill()
+        else:
+            subprocess.run(['taskkill', '/T', '/F', '/PID', str(proc.pid)],
+                           capture_output=True)
+        proc.communicate()
+        raise
+
+
 def main():
     argv = sys.argv[1:]
     passthrough = []
@@ -93,7 +118,11 @@ def main():
     parser.add_argument('names', nargs='*', metavar='DIR',
                         help='Explicit directory names to process (overrides --pattern)')
     args, unknown = parser.parse_known_args(argv)
-    passthrough.extend(unknown)
+    if unknown:
+        # Don't silently forward typo'd flags meant for generate_gallery.py;
+        # those must go after an explicit --
+        parser.error(f"unrecognized arguments before '--': {' '.join(unknown)} "
+                     f"(flags for generate_gallery.py belong after --)")
     if args.force:
         passthrough.append('--force')
 
@@ -140,14 +169,14 @@ def main():
         log(f'RUN {t.name} ...')
         t0 = time.time()
         try:
-            proc = subprocess.run(cmd, timeout=args.timeout or None)
+            returncode = run_with_timeout(cmd, args.timeout)
             dt = time.time() - t0
-            if proc.returncode == 0:
+            if returncode == 0:
                 log(f'DONE {t.name} ({dt:.1f}s)')
                 results.append((t.name, 'ok', dt))
             else:
-                log(f'FAIL {t.name} (exit {proc.returncode}, {dt:.1f}s)')
-                results.append((t.name, f'exit {proc.returncode}', dt))
+                log(f'FAIL {t.name} (exit {returncode}, {dt:.1f}s)')
+                results.append((t.name, f'exit {returncode}', dt))
         except subprocess.TimeoutExpired:
             dt = time.time() - t0
             log(f'FAIL {t.name} (timeout after {dt:.0f}s)')

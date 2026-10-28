@@ -72,16 +72,24 @@ while IFS= read -r directory; do
   for ext in $RAW_EXTS; do
     for f in "$directory"/*."$ext"; do
       if [ -e "$f" ]; then
-        run mv -- "$f" "$raw_target/"
-        moved=$((moved+1))
+        if [ -e "$raw_target/$(basename "$f")" ]; then
+          echo "SKIP: $f"
+        else
+          run mv -n -- "$f" "$raw_target/"
+          moved=$((moved+1))
+        fi
       fi
     done
   done
   for ext in $MOV_EXTS; do
     for f in "$directory"/*."$ext"; do
       if [ -e "$f" ]; then
-        run mv -- "$f" "$mov_target/"
-        moved=$((moved+1))
+        if [ -e "$mov_target/$(basename "$f")" ]; then
+          echo "SKIP: $f"
+        else
+          run mv -n -- "$f" "$mov_target/"
+          moved=$((moved+1))
+        fi
       fi
     done
   done

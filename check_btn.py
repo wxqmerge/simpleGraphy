@@ -2,7 +2,8 @@ import re
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
 
-with open('D:/xampp/htdocs/www_misc/index.html', 'r', encoding='utf-8') as f:
+PATH = sys.argv[1] if len(sys.argv) > 1 else 'D:/xampp/htdocs/www_misc/index.html'
+with open(PATH, 'r', encoding='utf-8') as f:
     html = f.read()
 
 # Find the actual slideshow-header div in HTML body

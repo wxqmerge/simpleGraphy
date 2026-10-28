@@ -21,7 +21,9 @@ if (Test-Path -LiteralPath '__EXE__') { Remove-Item -LiteralPath '__EXE__' -Forc
 Add-Type -TypeDefinition $src -OutputType ConsoleApplication -OutputAssembly '__EXE__' -ReferencedAssemblies 'System.dll'
 if (-not (Test-Path -LiteralPath '__EXE__')) { throw 'compiler produced no output' }
 '@
-$runner = $runner.Replace('__CS__', $tmpCs).Replace('__EXE__', $OutFile)
+# double single quotes so apostrophes in paths survive the quoted literals below
+$runner = $runner.Replace('__CS__', $tmpCs.Replace("'", "''"))
+$runner = $runner.Replace('__EXE__', $OutFile.Replace("'", "''"))
 
 $runnerTmp = Join-Path $env:TEMP 'simpleGraphy_install_build.ps1'
 Set-Content -LiteralPath $runnerTmp -Value $runner -Encoding UTF8

@@ -67,15 +67,17 @@ goto end
 
 REM --- Run ---
 :run
+REM Explorer "copy path" of a folder ends with \; \" would escape the closing quote for PowerShell
+if defined TARGET if "%TARGET:~-1%"=="\" set "TARGET=%TARGET:~0,-1%"
 if defined TARGET (
     if exist "%TARGET%\" (
-        echo Renaming photos in: %TARGET%
+        echo Renaming photos in: "%TARGET%"
         powershell -ExecutionPolicy Bypass -File "%PS1%" -Target "%TARGET%"
     ) else if exist "%TARGET%" (
-        echo Renaming file: %TARGET%
+        echo Renaming file: "%TARGET%"
         powershell -ExecutionPolicy Bypass -File "%PS1%" -Target "%TARGET%"
     ) else (
-        echo ERROR: Not found: %TARGET%
+        echo ERROR: Not found: "%TARGET%"
         goto end
     )
 ) else (

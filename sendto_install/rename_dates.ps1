@@ -38,7 +38,7 @@ $candidates = @(
     (Join-Path $env:USERPROFILE "bin\exiftool.exe")
 )
 foreach ($c in $candidates) {
-    if (Test-Path $c) { $script:exiftool = $c; break }
+    if (Test-Path -LiteralPath $c) { $script:exiftool = $c; break }
 }
 if (-not $script:exiftool) {
     $cmd = Get-Command exiftool -ErrorAction SilentlyContinue
@@ -57,7 +57,7 @@ if ($script:exiftool) {
 function Get-ExifStamp {
     param([string]$Path)
     if (-not $script:exiftool) { return $null }
-    $tags = @('DateTimeOriginal', 'CreateDate', 'DateTime', 'ModifyDate')
+    $tags = @('DateTimeOriginal', 'CreateDate', 'DateTime')
     $pattern = '(\d{4}):(\d{2}):(\d{2})\s+(\d{2}):(\d{2}):(\d{2})'
     foreach ($tag in $tags) {
         $out = (& $script:exiftool "-$tag" $Path 2>$null) -join ' '
@@ -94,7 +94,7 @@ function Process-File {
 
     $newName = $stamp + $base + $f.Extension
     $target = Join-Path $f.DirectoryName $newName
-    if (Test-Path $target) {
+    if (Test-Path -LiteralPath $target) {
         Write-Host "SKIP (exists): $newName"
         $script:skipped++
         return
@@ -106,7 +106,7 @@ function Process-File {
 
     foreach ($sidecar in @('caption', 'xmp')) {
         $sidecarPath = Join-Path $f.DirectoryName "$($f.Name).$sidecar"
-        if (Test-Path $sidecarPath) {
+        if (Test-Path -LiteralPath $sidecarPath) {
             Rename-Item -LiteralPath $sidecarPath -NewName "$newName.$sidecar"
         }
     }
@@ -125,8 +125,14 @@ function Process-Directory {
 
 # --- main ---
 if ($Target -and (Test-Path -LiteralPath $Target -PathType Leaf)) {
-    Write-Host "Renaming single file: $Target"
-    Process-File (Get-Item -LiteralPath $Target)
+    $leaf = Get-Item -LiteralPath $Target
+    if ($leaf.Name -notmatch $extPattern) {
+        Write-Host "SKIP (not a photo): $($leaf.Name)"
+        $skipped++
+    } else {
+        Write-Host "Renaming single file: $Target"
+        Process-File $leaf
+    }
 } else {
     $dir = if ($Target) { $Target } else { (Get-Location).Path }
     Write-Host "Renaming undated photos in: $dir (recursively)"

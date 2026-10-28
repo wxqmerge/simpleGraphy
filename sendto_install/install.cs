@@ -18,7 +18,11 @@ class Installer
         {
             Console.WriteLine("ERROR: Could not find the SendTo apps folder.");
             Console.WriteLine("Run install.exe from inside the sendto_install folder.");
-            if (!quiet) Console.ReadKey();
+            if (!quiet)
+            {
+                if (Console.IsInputRedirected) Console.ReadLine();
+                else Console.ReadKey();
+            }
             return 1;
         }
 
@@ -99,7 +103,11 @@ class Installer
         Console.WriteLine();
         Console.WriteLine("Done. Copied: " + ok + "   Failed: " + fail);
         Console.WriteLine("Right-click files/folders > Send to > make_pan.bat / slideshow.bat / random.bat ...");
-        if (!quiet) Console.ReadKey();
+        if (!quiet)
+        {
+            if (Console.IsInputRedirected) Console.ReadLine();
+            else Console.ReadKey();
+        }
         return fail == 0 ? 0 : 2;
     }
 

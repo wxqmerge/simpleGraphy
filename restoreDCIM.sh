@@ -71,7 +71,7 @@ while IFS= read -r f; do
       echo "DRY-RUN: would copy $rel -> $dest"
     else
       mkdir -p "$DST/$dir"
-      cp -- "$f" "$dest"
+      cp -p -- "$f" "$dest"   # -p keeps mtime so date-based tools see the original ModifyDate
       echo "copied: $rel"
     fi
     copied=$((copied+1))

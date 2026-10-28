@@ -39,7 +39,7 @@ $candidates = @(
     (Join-Path $env:USERPROFILE "bin\exiftool.exe")
 )
 foreach ($c in $candidates) {
-    if (Test-Path $c) { $script:exiftool = $c; break }
+    if (Test-Path -LiteralPath $c) { $script:exiftool = $c; break }
 }
 if (-not $script:exiftool) {
     $cmd = Get-Command exiftool -ErrorAction SilentlyContinue
@@ -58,7 +58,7 @@ if ($script:exiftool) {
 function Get-ExifStamp {
     param([string]$Path)
     if (-not $script:exiftool) { return $null }
-    $tags = @('DateTimeOriginal', 'CreateDate', 'DateTime', 'ModifyDate')
+    $tags = @('DateTimeOriginal', 'CreateDate', 'DateTime')
     $pattern = '(\d{4}):(\d{2}):(\d{2})\s+(\d{2}):(\d{2}):(\d{2})'
     foreach ($tag in $tags) {
         $out = (& $script:exiftool "-$tag" $Path 2>$null) -join ' '
@@ -105,19 +105,19 @@ function Process-File {
     }
 
     $folder = Join-Path $f.DirectoryName $folderName
-    if (-not (Test-Path $folder)) {
-        New-Item -ItemType Directory -Path $folder | Out-Null
+    if (-not (Test-Path -LiteralPath $folder)) {
+        New-Item -ItemType Directory -LiteralPath $folder | Out-Null
         Write-Host "Created: $folder"
     }
 
     $target = Join-Path $folder $newName
-    if (Test-Path $target) {
+    if (Test-Path -LiteralPath $target) {
         Write-Host "SKIP (exists): $($f.Name)"
         $script:skipped++
         return
     }
 
-        Move-Item -LiteralPath $f.FullName -Destination $target -Force
+    Move-Item -LiteralPath $f.FullName -Destination $target
     if ($newName -ne $f.Name) {
         Write-Host "Renamed+Moved: $($f.Name) -> $folder/$newName"
         $script:renamed++
@@ -128,8 +128,13 @@ function Process-File {
 
     foreach ($sidecar in @('caption', 'xmp')) {
         $sidecarPath = Join-Path $f.DirectoryName "$($f.Name).$sidecar"
-        if (Test-Path $sidecarPath) {
-            Move-Item -LiteralPath $sidecarPath -Destination (Join-Path $folder "$newName.$sidecar") -Force
+        if (Test-Path -LiteralPath $sidecarPath) {
+            $sidecarTarget = Join-Path $folder "$newName.$sidecar"
+            if (Test-Path -LiteralPath $sidecarTarget) {
+                Write-Host "SKIP (exists): $newName.$sidecar"
+            } else {
+                Move-Item -LiteralPath $sidecarPath -Destination $sidecarTarget
+            }
         }
     }
 }
@@ -147,8 +152,14 @@ function Process-Directory {
 
 # --- main ---
 if ($Target -and (Test-Path -LiteralPath $Target -PathType Leaf)) {
-    Write-Host "Organizing single file: $Target"
-    Process-File (Get-Item -LiteralPath $Target)
+    $leaf = Get-Item -LiteralPath $Target
+    if ($extensions -notcontains $leaf.Extension.TrimStart('.')) {
+        Write-Host "SKIP (not a photo): $($leaf.Name)"
+        $skipped++
+    } else {
+        Write-Host "Organizing single file: $Target"
+        Process-File $leaf
+    }
 } else {
     $dir = if ($Target) { $Target } else { (Get-Location).Path }
     Write-Host "Organizing photos in: $dir (top level only)"

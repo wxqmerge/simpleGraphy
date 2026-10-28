@@ -45,10 +45,10 @@ The bottleneck is the **image embedding** (prompt eval), not text generation. Th
 
 ## Server Config
 
-`D:\llama.cpp.b10153\runq36MTP27Bvision.bat`:
+`C:\llama.cpp.b10153\runq36MTP27Bvision.bat`:
 ```
---model "D:\models\Qwen3.6-27B-UD-Q5_K_XL.gguf"
---mmproj "D:\models\mmproj-BF16-27B.gguf"
+--model "C:\models\Qwen3.6-27B-UD-Q5_K_XL.gguf"
+--mmproj "C:\models\mmproj-BF16-27B.gguf"
 --ctx-size 65536
 --n-predict 512
 --threads 24

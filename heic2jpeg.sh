@@ -14,6 +14,12 @@ fi
 
 for f in "${files[@]}"; do
   out="${f%.*}.jpg"
+  # Never overwrite an existing .jpg (heic+jpg same-stem pairs; also guards
+  # *.HEIC/*.heic double-match on case-insensitive filesystems).
+  if [ -e "$out" ]; then
+    echo "SKIP: $f -> $out (exists)"
+    continue
+  fi
   echo "Converting: $f -> $out"
   convert "$f" -quality 90 "$out"
 done

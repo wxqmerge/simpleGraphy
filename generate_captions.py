@@ -50,11 +50,12 @@ def caption_path(image_path):
 def read_caption(image_path):
     """Read existing caption for an image."""
     cap = caption_path(image_path)
-    if os.path.exists(cap):
-        with open(cap, 'r', encoding='utf-8') as f:
+    try:
+        with open(cap, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read().strip()
             return content if content else None
-    return None
+    except (IOError, OSError):
+        return None
 
 
 def write_caption(image_path, text):

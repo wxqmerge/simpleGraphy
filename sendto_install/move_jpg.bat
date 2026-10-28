@@ -72,8 +72,8 @@ for %%I in ("%DIR%") do set "FOLDER_NAME=%%~nxI"
 
 set "DEST=%DIR%\%FOLDER_NAME%"
 
-echo Moving JPGs in: %DIR%
-echo Destination:   %DEST%
+echo Moving JPGs in: "%DIR%"
+echo Destination:   "%DEST%"
 
 if not exist "%DEST%\" mkdir "%DEST%"
 
@@ -91,11 +91,11 @@ goto end
 :try_move
 set "NAME=%~nx1"
 if exist "%DEST%\%NAME%" (
-    echo SKIP exists: %NAME%
+    echo SKIP exists: "%NAME%"
     set /a SKIPPED+=1
 ) else (
     move "%~1" "%DEST%\" >nul
-    echo Moved: %NAME%
+    echo Moved: "%NAME%"
     set /a MOVED+=1
 )
 goto :eof

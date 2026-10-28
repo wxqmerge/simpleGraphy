@@ -120,16 +120,20 @@ if [ "$DRY_RUN" = 1 ]; then
   echo "  [dry-run] would write nginx config for $FULL_DOMAIN (HTTP->HTTPS + ACME + static root $WEB_ROOT)"
 else
   # Choose the http2 syntax for this nginx version.
-  #   nginx >= 1.25: "http2 on;" as its own directive (new syntax)
-  #   nginx <  1.25: "http2" appended to the listen line (old syntax; still works on 1.25+)
+  #   nginx >= 1.25.1: "http2 on;" as its own directive (new syntax)
+  #   nginx <  1.25.1: "http2" appended to the listen line (old syntax)
+  # nginx lives in /usr/sbin (or /usr/local/sbin), often absent from an
+  # unprivileged deploy user's PATH, so augment PATH while probing.
   HTTP2_SUFFIX=" http2"
   HTTP2_DIRECTIVE=""
-  if command -v nginx &>/dev/null; then
-    NGINX_VER="$(nginx -v 2>&1 | sed -n 's/.*nginx\/\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')"
+  if NGINX_BIN="$(PATH="$PATH:/usr/sbin:/usr/local/sbin"; command -v nginx)"; then
+    NGINX_VER="$("$NGINX_BIN" -v 2>&1 | sed -n 's/.*nginx\/\([0-9][0-9.]*\).*/\1/p')"
     if [ -n "$NGINX_VER" ]; then
       MAJOR="${NGINX_VER%%.*}"
       MINOR="${NGINX_VER#*.}"; MINOR="${MINOR%%.*}"
-      if [ "$MAJOR" -gt 1 ] || { [ "$MAJOR" -eq 1 ] && [ "$MINOR" -ge 25 ]; }; then
+      PATCH="${NGINX_VER#*.*.}"; [ "$PATCH" = "$NGINX_VER" ] && PATCH=0
+      PATCH="${PATCH%%[!0-9]*}"
+      if [ "$MAJOR" -gt 1 ] || { [ "$MAJOR" -eq 1 ] && [ "$MINOR" -gt 25 ]; } || { [ "$MAJOR" -eq 1 ] && [ "$MINOR" -eq 25 ] && [ "$PATCH" -ge 1 ]; }; then
         HTTP2_SUFFIX=""
         HTTP2_DIRECTIVE="http2 on;"
       fi

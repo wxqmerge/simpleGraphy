@@ -11,6 +11,8 @@ Tests:
 """
 import os
 import re
+import sys
+import html as html_mod
 from pathlib import Path
 
 GREEN = '\033[92m'
@@ -30,10 +32,9 @@ def resolve(base, rel):
         return rel
     if rel == './':
         return os.path.abspath(base)
-    # Convert forward slashes for proper resolution on Windows
+    # normpath handles platform separators; do NOT force backslashes (runs on Linux too)
     norm_rel = rel.replace('\\', '/')
-    result = os.path.normpath(os.path.join(base, norm_rel))
-    return result.replace('/', '\\')
+    return os.path.normpath(os.path.join(base, norm_rel))
 
 
 def find_pages():
@@ -82,7 +83,8 @@ def test_page(idx_path):
             continue
         
         resolved = resolve(dirpath, href)
-        exists = os.path.isdir(resolved) or os.path.basename(resolved) == 'simpleGraphy'
+        # Breadcrumb hrefs end in index.html; target dir must exist (page may not, e.g. Root above galleries)
+        exists = os.path.isdir(os.path.dirname(resolved))
         
         # Special case: root link from galleries/ should go to parent of galleries/
         if name == 'Root' and rel.count('/') == 0:
@@ -100,44 +102,50 @@ def test_page(idx_path):
             results.append((f'{rel}/ breadcrumb "{name}" double-slash', False, f'href="{href}"'))
     
     # --- 2. Browse arrows ---
-    prev_match = re.search(r"const browsePrevPath\s*=\s*'([^']*)';", content)
-    next_match = re.search(r"const browseNextPath\s*=\s*'([^']*)';", content)
+    prev_match = re.search(r'''const browsePrevPath\s*=\s*["']([^"']*)["'];''', content)
+    next_match = re.search(r'''const browseNextPath\s*=\s*["']([^"']*)["'];''', content)
     
     prev_val = prev_match.group(1) if prev_match else ''
     next_val = next_match.group(1) if next_match else ''
     
-    # Arrows should be empty string (no nav) or relative path ending with /
+    # Arrows point at sibling pages: relative path ending in index.html
     if prev_val:
         resolved = resolve(dirpath, prev_val)
-        ok = os.path.isdir(resolved)
-        results.append((f'{rel}/ prev arrow', ok, f'href="{prev_val}" -> {os.path.basename(resolved)}'))
+        ok = os.path.isfile(resolved)
+        results.append((f'{rel}/ prev arrow', ok, f'href="{prev_val}" -> {resolved}'))
     
     if next_val:
         resolved = resolve(dirpath, next_val)
-        ok = os.path.isdir(resolved)
-        results.append((f'{rel}/ next arrow', ok, f'href="{next_val}" -> {os.path.basename(resolved)}'))
+        ok = os.path.isfile(resolved)
+        results.append((f'{rel}/ next arrow', ok, f'href="{next_val}" -> {resolved}'))
     
     # --- 3. Folder links in grid ---
     folder_count = 0
-    for m in re.finditer(r'class="gallery-item"[^>]*>\s*<a\s+href="([^"]*)"', content):
-        href = m.group(1)
+    folder_hrefs = []
+    # Current generator: <div class="gallery-item folder" onclick="window.location.href=&quot;...&quot;">
+    for m in re.finditer(r'class="gallery-item folder"[^>]*onclick="window\.location\.href=&quot;(.*?)&quot;', content):
+        folder_hrefs.append(m.group(1))
+    for m in re.finditer(r'class="gallery-item folder"[^>]*onclick="window\.location\.href=\'([^\']*)\'', content):
+        folder_hrefs.append(m.group(1))
+    # Legacy <a href> markup inside folder items
+    for m in re.finditer(r'class="gallery-item[^"]*folder[^"]*"[^>]*>\s*<a\s+href="([^"]*)"', content):
+        folder_hrefs.append(m.group(1))
+    for href in folder_hrefs:
+        href = html_mod.unescape(href)
         # Skip image/lightbox paths
         if any(href.startswith(p) for p in ['.thumbs', '.lr', 'lightbox', '#']):
             continue
-        # Check if it's a folder link by looking at context
-        start = max(0, content.rfind('<a', 0, m.start()))
-        end = min(len(content), content.find('</a>', m.start()) + 4)
-        context = content[start:end]
-        if 'folder' in context.lower():
-            folder_count += 1
-            resolved = resolve(dirpath, href)
-            has_index = os.path.isfile(os.path.join(resolved, 'index.html'))
-            results.append((f'{rel}/ folder link', has_index, f'href="{href}" -> {os.path.basename(resolved)}'))
+        folder_count += 1
+        resolved = resolve(dirpath, href)
+        has_index = os.path.isfile(resolved) or os.path.isfile(os.path.join(resolved, 'index.html'))
+        results.append((f'{rel}/ folder link', has_index, f'href="{href}"'))
     
+    n_folder_items = content.count('class="gallery-item folder"')
     if folder_count == 0:
-        # No folder links found - check if there are any gallery-items at all
-        has_items = 'gallery-item' in content
-        results.append((f'{rel}/ folders', True, f'{folder_count} folders (page has gallery-item: {has_items})'))
+        if n_folder_items:
+            results.append((f'{rel}/ folders', False, f'{n_folder_items} folder item(s) in HTML but no links parsed'))
+        else:
+            results.append((f'{rel}/ folders', True, 'no folder items (leaf dir)'))
     
     return results
 
@@ -174,3 +182,5 @@ if failures:
                 print(f'           {detail}')
 else:
     print(f'{GREEN}{BOLD}ALL {len(all_results)} CHECKS PASSED{RESET}')
+
+sys.exit(1 if failures else 0)
