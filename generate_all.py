@@ -13,7 +13,7 @@ Examples (on the server):
   python3 generate_all.py --dry-run                # show what would run
   python3 generate_all.py --only www_daa www_misc  # just these
   python3 generate_all.py --exclude www_sothh      # everything except
-  python3 generate_all.py -- --slideshow --random  # flags for generate_gallery.py
+  python3 generate_all.py --slideshow --random  # common flags work directly
   python3 generate_all.py --force -- --thumb-size 300
 
 Cron (daily 01:30, after the main gallery job):
@@ -88,6 +88,11 @@ def run_with_timeout(cmd, timeout):
         raise
 
 
+# generate_gallery.py flags accepted directly on generate_all.py (before --)
+GEN_BOOL_FLAGS = {'--slideshow', '--random', '--no-browse'}
+GEN_VALUE_FLAGS = {'--thumbs', '--lr-size', '--random-depth'}
+
+
 def main():
     argv = sys.argv[1:]
     passthrough = []
@@ -95,10 +100,32 @@ def main():
         i = argv.index('--')
         argv, passthrough = argv[:i], argv[i + 1:]
 
+    # Lift the common generator flags out of our own argv so the frequent
+    # invocation works: `generate_all.py --slideshow --random`. Unknown flags
+    # still error below, so typos can't silently reach the generator.
+    head = []
+    j = 0
+    while j < len(argv):
+        a = argv[j]
+        if a in GEN_BOOL_FLAGS:
+            if a not in passthrough:
+                passthrough.append(a)
+            j += 1
+            continue
+        if a in GEN_VALUE_FLAGS and j + 1 < len(argv):
+            if a not in passthrough:
+                passthrough.extend([a, argv[j + 1]])
+            j += 2
+            continue
+        head.append(a)
+        j += 1
+    argv = head
+
     parser = argparse.ArgumentParser(
         description='Run generate_gallery.py over every www_* directory.',
-        epilog='Flags after -- are passed through to generate_gallery.py '
-               '(e.g. -- --slideshow --random --thumb-size 300)')
+        epilog='Common generate_gallery.py flags (--slideshow --random --no-browse '
+               '--thumbs N --lr-size N --random-depth N) work directly; all others '
+               'go after -- (e.g. -- --some-flag)')
     parser.add_argument('--base', default=os.environ.get('GALLERY_BASE', DEFAULT_BASE),
                         help=f'Base directory to scan (default: {DEFAULT_BASE})')
     parser.add_argument('--pattern', default=DEFAULT_PATTERN,
@@ -122,7 +149,9 @@ def main():
         # Don't silently forward typo'd flags meant for generate_gallery.py;
         # those must go after an explicit --
         parser.error(f"unrecognized arguments before '--': {' '.join(unknown)} "
-                     f"(flags for generate_gallery.py belong after --)")
+                     f"(known flags: --slideshow --random --no-browse --thumbs N "
+                     f"--lr-size N --random-depth N; other generate_gallery.py "
+                     f"flags belong after --)")
     if args.force:
         passthrough.append('--force')
 
